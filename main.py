@@ -1,14 +1,19 @@
-# from ast import arguments
-# import time
+import asyncio
 import socket
 import threading
 import os
 import gzip 
 import mimetypes
 import signal
-# import sys
-# from types import BuiltinMethodType
-from typing import final 
+import ssl
+import time
+import json
+
+from datetime import datetime
+from types import NoneType
+from typing import Optional, Tuple, Dict, Union
+
+# neovim auto-imports stuff as i use it - i love it
 
 # def DNS_LOOKUP(domainName: str):
 #     # domain name sys is a "set of servers"
@@ -37,9 +42,39 @@ HOST_SERVER_IPADDR: str = '127.0.0.1'; # IPv4 loopback address
 # HOST_SERVER_IPADDR: str = '0.0.0.0';
 PORT: int = 8080;
 DOC_ROOT: str = './catgirl';
-BUFFER_SIZE: int = 4096;
+BUFFER_SIZE: int = 4096; # b
 
 serverRunningStatus: bool = True; # why is the T captial ew
+
+### --- DNS --- ###
+
+def DNS_LOOKUP(domainName: str) -> Union[str, None]:
+    DNS_database = {
+        "localhost": "127.0.0.1",
+        # "catgirl.local": "127.0.0.1",
+        # "myserver.local": "127.0.0.1",
+        "localhost6": "::1",
+        # "catgirl6.local": "::1"
+    };
+
+    print(f"[%DNS_LOOKUP]: now resolving domain name: {domainName}");
+
+    IP_address = DNS_database.get(domainName.lower());
+
+    if (IP_address != None):
+        print(f"[%DNS_LOOKUP]: DNS lookup successful, now connected to IP - {IP_address}");
+        return (IP_address);
+    else:
+        print(f"[%DNS_LOOKUP]: DNS lookup failure, couldnt find {domainName} - sure nothing is wrong?");
+        return (None);
+
+### --- USER AGENT STUFF --- ### 
+
+    def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]: # Dict[KT, VT] 
+
+        originalUnknownInfo = {
+            'browser': 'unknwon'
+        }
 
 def interruptSignalHandler(sigRecieved, frame) -> str:
     # SIGINT / SIGSTP
@@ -127,8 +162,9 @@ def READ_FULL_HTTP_REQUEST(socketObj: socket.socket, headersDict, initialBody: b
     HTTP_contentLength: int = int(headersDict.get('content-length', 0));
     HTTP_currentLength: int = len(initialBody);
 
-    if HTTP_currentLength > HTTP_contentLength:
-        return (initialBody);
+    # if HTTP_currentLength > HTTP_contentLength:
+    if HTTP_currentLength >= HTTP_contentLength:
+        return (initialBody[:HTTP_contentLength])
 
     HTTP_bodyParts = [initialBody];
 
@@ -201,6 +237,8 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
             #    clientRequest['version'] == 'HTTP/1.0' and connectionRequest != 'keep-alive'
             # );
 
+            connectionRequest = clientRequest['headersDict'].get('connection', '').lower;
+
             if clientRequest['version'] == 'HTTP/1.1':
                 connectionLifeStatus = (connectionRequest != 'close');
             else:
@@ -259,6 +297,8 @@ def START_LOOPBACK_SERVER():
     serverEndpoint: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM);
     serverEndpoint.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
 
+    # iso.bind((HOST_SERVER_IPADDR, PORT));
+
     try:
         serverEndpoint.bind((HOST_SERVER_IPADDR, PORT));
         serverEndpoint.listen(5);
@@ -270,18 +310,26 @@ def START_LOOPBACK_SERVER():
 
         while serverRunningStatus:
                 try:
+                    # x = serverEndpoint.accept();
                     clientConnection, clientAddress = serverEndpoint.accept(); # server ssocket will accept incoming connxs 
 
+                    # every demultiplex thread will execute HANDLE_CLIENT_CONNECTION(clientConnection, clientAddress); 
                     clientThread = threading.Thread(
                         target = HANDLE_CLIENT_CONNECTION, 
-                        args =(clientConnection, clientAddress), 
+                        args = (clientConnection, clientAddress), # args mandatorily requisite a tuple
                         daemon = True
                     );
+
+                    # https://docs.python.org/3/library/threading.html
+                    # network requests made
+                    # only one thread executes py bytecode at a time
+                    # no new process recreation
+                    # clientThread = threading.Thread()
                     
                     clientThread.start();
 
-                except OSError:
-                    break;
+                except OSError: # should return network/socket errs
+                    break; 
     except Exception as serverSideERR:
         print(f"fatal server-side error - {serverSideERR}");
     finally:
