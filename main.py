@@ -71,6 +71,7 @@ def DNS_LOOKUP(domainName: str) -> Union[str, None]:
 ### --- USER AGENT STUFF --- ### 
 
 def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]: # Dict[KT, VT] 
+
     browserDatabase = [
         ("firefox", "Firefox", "Firefox/"),
         ("edg",     "Edge",    "Edg/"),
@@ -82,9 +83,13 @@ def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]: # Dict[KT, VT]
         "browser": "unknown",
         "version": "unknown",
         "os": "unknown",
-        "device:" "unknown"
-    }
+        "device": "unknown"
+    };
 
+    if userAgent == None or not userAgent: # are these the same thing?
+        return (defaultBrowserInfo);
+
+    userAgentInfoLowered = userAgent.lower();
 
 def interruptSignalHandler(sigRecieved, frame) -> str:
     # SIGINT / SIGSTP
