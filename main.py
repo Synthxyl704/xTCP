@@ -39,7 +39,7 @@ PORT: int = 8080;
 DOC_ROOT: str = './catgirl';
 BUFFER_SIZE: int = 4096;
 
-serverRunningStatus: bool= True; # why is the T captial ew
+serverRunningStatus: bool = True; # why is the T captial ew
 
 def interruptSignalHandler(sigRecieved, frame) -> str:
     # SIGINT / SIGSTP
@@ -83,7 +83,7 @@ def COMPRESS_RESPONSE(data: bytes, encodeType: str) -> tuple[bytes, str]:
         except Exception as GZIP_COMPRESSION_ERR: # pass;
             print(f"[!ERROR]: GZip compression failure - {GZIP_COMPRESSION_ERR}");
 
-    return (data, '<encode_identity>');
+    return (data, 'identity'); 
 
 def PARSE_HTTP_REQUEST(requestBytes: bytes):
 
@@ -157,7 +157,7 @@ def BUILD_HTTP_RESPONSE(statusCode, contentType, contentLength, encoding = 'id',
         f"HTTP/1.1 {statusCode} {statusText}",
         f"Content-Type: {contentType}",
         f"Content-Length: {contentLength}",
-        f"Encoding: {encoding}",
+        f"Content-Encoding: {encoding}",
         f"Connection: {connection}"
     ];
 
@@ -169,7 +169,7 @@ def BUILD_HTTP_RESPONSE(statusCode, contentType, contentLength, encoding = 'id',
     return ('\r\n'.join(headersDict).encode('utf-8'));
 
 def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
-    print(f"[+INFO]: New connection from {clientAddress}")
+    print(f"[+INFO]: Client connection instantiated: {clientAddress}")
 
     connection.settimeout(5)
 
@@ -196,10 +196,15 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
 
                 print(f"[++DEBUG_LOG]: Body received ({len(clientRequest['body'])} bytes)");
 
-            connectionRequest = clientRequest['headersDict'].get('connection', '').lower();
-            connectionLifeStatus = not (
-                clientRequest['version'] == 'HTTP/1.0' and connectionRequest != 'keep-alive'
-            );
+            # connectionRequest = clientRequest['headersDict'].get('connection', '').lower();
+            # connectionLifeStatus = not (
+            #    clientRequest['version'] == 'HTTP/1.0' and connectionRequest != 'keep-alive'
+            # );
+
+            if clientRequest['version'] == 'HTTP/1.1':
+                connectionLifeStatus = (connectionRequest != 'close');
+            else:
+                connectionLifeStatus = (connectionRequest == 'keep-alive');
 
             filePath = os.path.join(DOC_ROOT, clientRequest['path'].lstrip('/'));
             statusCode = 200;
