@@ -46,6 +46,47 @@ BUFFER_SIZE: int = 4096; # b
 
 serverRunningStatus: bool = True; # why is the T captial ew
 
+class SESSION_MANAGEMENT:
+    def __init__(self) -> None:
+        self.sessionsDict: Dict[str, Dict] = {};
+        self.sessionCounter: int = 0;
+        self.sessionLock = threading.Lock();
+
+    def CREATE_NEW_SESSION(self, clientAddress: tuple):
+        with self.sessionLock:
+            self.sessionCounter += 1;
+            sessionID = f"[+INFO]: SESSION_%{self.sessionCounter}_C-T::{int{time.time()}}"; # horrible UX, cool UI
+
+            self.sessionsDict[sessionID] = {
+                'id': sessionID,
+                'client_address': clientAddress,
+                'created_at': datetime.now().isoformat(),
+                'last_access': datetime.now().isoformat(),
+                'request_count': 0,
+                'user_agent': None,
+                'geo_info': None
+            };
+
+            print(f"[+SESSION]: Meta - {sessionID} | Client - {clientAddress}"); # meta means metadata here includes sessionID 
+            return (sessionID);
+    
+    def UPDATE_SESSION(self, sessionID: str, userAgent: str = None, geolocationInfo: Dict):
+        with self.sessionLock:
+            if sessionID in self.sessionsDict:
+                self.sessionsDict[sessionID]['last_access'] = datetime.now().isoformat();
+                self.sessionsDict[sessionID]['request_count'] += 1;
+
+                if userAgent: 
+                    self.sessionsDict[sessionID]['user_agent'] = userAgent;
+                if geolocationInfo:
+                    self.sessionsDict[sessionID]['geo_info'] = geolocationInfo;
+
+    def GET_SESSION_INFO(self, sessionID: str) -> Optional[Dict]:
+        with self.sessionLock:
+            return (self.sessionsDict.get(sessionID));
+
+SESSION_MANAGER = SESSION_MANAGEMENT();
+
 ### --- DNS --- ###
 
 def DNS_LOOKUP(domainName: str) -> Union[str, None]:
@@ -75,7 +116,7 @@ browserDatabase = [ # make global for one time allocation
     ("edg",     "Edge",    "Edg/"),
     ("chrome",  "Chrome",  "Chrome/"),
     ("safari",  "Safari",  None) # none is a bad idea but will fix l8r
-]; 
+]; # thx
 
 OS_Database = [
     ("Windows 10/11", ["windows nt 10"]),
@@ -133,6 +174,35 @@ def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]: # Dict[KT, VT]
 
     return (defaultBrowserInfo);
 
+### --- CONFIG SETUP HERE --- ###
+
+# Standard host addresses
+# etc/hosts
+# 127.0.0.1  localhost
+# 127.0.0.1  isodns.local | -< custom DNS here?
+# ::1        localhost ip6-localhost ip6-loopback
+# [X]        [Y]
+# # This host address
+# 127.0.1.1  isoxiavant-vostro3520
+
+def PRINT_HOST_FILE_SETUP() -> Optional[None]:  
+    # 127.0.0.1    localhost + isodns.local
+    # ::1          localhost6
+
+    print("\n" + "-"*80);
+    print("[~DNS_SETUP]:");
+    print("="*80);
+    print("\n --- IPv4 mappings ---");
+    # print("127.0.0.1  |  catgirl.local");
+    print("127.0.0.1  |  isodns.local");
+    print("\n --- IPv6 mappings ---");
+    # print("::1        |  catgirl_IPv6.local");
+    print("[::1]      |  localhost6");
+    print("-"*80);
+    print("Linux/Mac: /etc/hosts");
+    print("Windows: C:\\Windows\\System32\\drivers\\etc\\hosts");
+    print("-"*80 + "\n");
+
 def interruptSignalHandler(sigRecieved, frame) -> str:
     # SIGINT / SIGSTP
     global serverRunningStatus; 
@@ -170,22 +240,39 @@ def COMPRESS_RESPONSE(data: bytes, encodeType: str) -> tuple[bytes, str]:
         try:
             compressedData: bytes = gzip.compress(data);
 
-            if (len(compressedData) < len(data)):
-                return (compressedData, 'gzip'); # pigeonhole principle
-        except Exception as GZIP_COMPRESSION_ERR: # pass;
+            if (len(compressedData) < len(data)):   # sometimes the compressed data has a longer length than the actual data
+                return (compressedData, 'gzip');    # in that case, we mitigate the "pigeonhole principle"
+        except Exception as GZIP_COMPRESSION_ERR:   # pass;
             print(f"[!ERROR]: GZip compression failure - {GZIP_COMPRESSION_ERR}");
 
     return (data, 'identity'); 
 
-def PARSE_HTTP_REQUEST(requestBytes: bytes):
+def GET_CLIENT_GEOLOC(clientIP: str):
+    if clientIP in ['127.0.0.1', '::1', 'localhost', 'local']: # i sure hope the dot acts as a delimter for differentiation
+        return {
+            'ip': clientIP,
+            'location': 'localhost',
+            'country': '[x]',
+            'city': '[x]',
+            'isp': 'loopback address'
+        };
+
+    return {
+        'ip': clientIP,
+        'location': 'Unknown',
+        'country': 'Unknown',
+        'city': 'Unknown',
+        'isp': 'Unknown'
+    };
+
+def PARSE_HTTP_REQUEST(requestBytes: bytes): # TCP returns raw bytes
 
     # GET /sex.html HTTP/1.1\r\n | <method> <path> <ver>
-    # Host: hi.com\r\n           |
+    # Host: dns.com or 127.0.0.1:8080 \r\n           
     # User-Agent: <x>\r\n        | 
     # Accept: */*\r\n            | 
     # # \r\n = CRLF              | 
     # <body>
-
 
     HTTP_headerBodySplit = requestBytes.split(b'\r\n\r\n', 1); # maxsplit = 1 
 
