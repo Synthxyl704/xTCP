@@ -1,4 +1,3 @@
-import asyncio
 import socket
 import threading
 import os
@@ -10,8 +9,8 @@ import time
 import json
 
 from datetime import datetime
-from types import NoneType
-from typing import Optional, Dict, Union
+from typing import Optional, Dict, Union 
+from email.utils import formatdate
 
 # neovim auto-imports stuff as i use it - i love it
 
@@ -38,24 +37,30 @@ from typing import Optional, Dict, Union
 # https://datatracker.ietf.org/doc/html/rfc7235
 # https://datatracker.ietf.org/doc/html/rfc9110
 
-HOST_SERVER_IPADDR: str = '127.0.0.1'; # IPv4 loopback address
-# HOST_SERVER_IPADDR: str = '0.0.0.0';
+HOST_SERVER_IPv4: str = '127.0.0.1'; # IPv4 loopback address
+HOST_SERVER_IPv6: str = '::1';
 PORT: int = 8080;
-DOC_ROOT: str = './catgirl';
-BUFFER_SIZE: int = 4096; # b
+TLS_PORT: int = 8443;
+# DOC_ROOT: str = './catgirl';
+BUFFER_SIZE: int = 4096;
+
+CERTIFICATION_FILE: str = 'server.crt';
+KEY_FILE: str = 'server.key';
 
 serverRunningStatus: bool = True; # why is the T captial ew
 
+### --- CLASSES DEFINITION START --- ###
+
 class SESSION_MANAGEMENT:
     def __init__(self) -> None:
-        self.sessionsDict: Dict[str, Dict] = {};
+        self.sessionsDict: Dict[str, Dict] = {}; # the sessionID and its metadata in a dictionary
         self.sessionCounter: int = 0;
         self.sessionLock = threading.Lock();
 
     def CREATE_NEW_SESSION(self, clientAddress: tuple):
         with self.sessionLock:
             self.sessionCounter += 1;
-            sessionID = f"[+INFO]: SESSION_%{self.sessionCounter}_C-T::{int{time.time()}}"; # horrible UX, cool UI
+            sessionID = f"[+INFO]: SESSION_[{self.sessionCounter}]_C-T::{int(time.time())}" # horrible UX, cool UI
 
             self.sessionsDict[sessionID] = {
                 'id': sessionID,
@@ -70,7 +75,7 @@ class SESSION_MANAGEMENT:
             print(f"[+SESSION]: Meta - {sessionID} | Client - {clientAddress}"); # meta means metadata here includes sessionID 
             return (sessionID);
     
-    def UPDATE_SESSION(self, sessionID: str, userAgent: str = None, geolocationInfo: Dict):
+    def UPDATE_SESSION(self, sessionID: str, userAgent: str = None, geolocationInfo: Dict = None):
         with self.sessionLock:
             if sessionID in self.sessionsDict:
                 self.sessionsDict[sessionID]['last_access'] = datetime.now().isoformat();
@@ -86,6 +91,34 @@ class SESSION_MANAGEMENT:
             return (self.sessionsDict.get(sessionID));
 
 SESSION_MANAGER = SESSION_MANAGEMENT();
+
+class transactionLogger:
+    def __init__(self, logFile: str = "transactionLogger"):
+        self.logFile = logFile;
+        self.threadLock = threading.Lock();
+
+    def LOG_ENTRY(self, data: Dict):
+        with self.threadLock: # atomic logging + auto release
+            timestamp = datetime.now().isoformat();
+            logEntry = {'timestamp': timestamp, **data};
+
+            print(f"[#TxN]: ");
+            print(f"Session: {logEntry.get('session')} | Client: {logEntry.get('client')}");
+            print(f"{logEntry.get('method')} {logEntry.get('path')} → {logEntry.get('status')}");
+            print(f"Browser: {logEntry.get('browser')} | OS: {logEntry.get('os')} | Device: {logEntry.get('device')}");
+            print(f"Location: {logEntry.get('location')} | Size: {logEntry.get('size')}b | Time: {logEntry.get('duration'):.2f}ms");
+            print(f"");
+
+            try:
+                with open(self.logFile, 'a') as fileOpened:
+                    fileOpened.write(json.dumps(logEntry) + '\n');
+            
+            except Exception as errorDuringJsonLogDump:
+                print(f"[#TxN | +INFO]: There was some ERROR in JSON log dumping - {errorDuringJsonLogDump}");
+
+TRANSACTION_LOGGER = transactionLogger();
+
+### --- END OF CLASSES --- ###
 
 ### --- DNS --- ###
 
@@ -149,16 +182,25 @@ def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]: # Dict[KT, VT]
     # UA = ["mozilla/5.0 (linux; EndeavourOS) Firefox/146.0.1 ..."];
 
     for browserName, browserVersionToken, identifyingSubstring in browserDatabase:
-        if identifyingSubstring in userAgent:
+        if identifyingSubstring and identifyingSubstring in userAgent:
             defaultBrowserInfo["browser"] = browserName;
 
-            if browserVersionToken in userAgent:
-                # defaultBrowserInfo["version"] = browserVersionToken;
-                browserVersionToken["version"] = (
-                    userAgent.split(browserVersionToken, 1)[1].split()[0] # AI wrote the logic for this, i dont know how this works
-                );
+            try:
+                # userAgent = "Mozilla/5.0 ... Firefox/120.0 ..."
+                versionString = userAgent.split(identifyingSubstring, 1)[1].split()[0];
+                defaultBrowserInfo["version"] = versionString;
+            except IndexError:
+                defaultBrowserInfo["version"] = "unknown";
 
             break; 
+
+            # if browserVersionToken in userAgent:
+            #   defaultBrowserInfo["version"] = browserVersionToken;
+            #   browserVersionToken["version"] = (
+            #       userAgent.split(browserVersionToken, 1)[1].split()[0] # AI wrote the logic for this, i dont know how this works
+            # );
+
+            # break; 
             # this can be done with regexes as well!?
 
     for rule in OS_Database:
@@ -206,20 +248,29 @@ def PRINT_HOST_FILE_SETUP() -> Optional[None]:
 def interruptSignalHandler(sigRecieved, frame) -> str:
     # SIGINT / SIGSTP
     global serverRunningStatus; 
-    print(f"\n\n[-/+INFO]: SERVER SHUTDOWN SIGNAL RECIEVED!\n\n");
-    serverRunningStatus = False;
 
-    try:
-        # AF_INET = strictly IPv4 | SOCK_STREAM = socket_type = TCP
-        dummyEndpoint = socket.socket(socket.AF_INET, socket.SOCK_STREAM);
-        dummyEndpoint.connect((HOST_SERVER_IPADDR, PORT)); 
-        dummyEndpoint.close();
+    if serverRunningStatus:
+        print(f"\n\n[-/+INFO]: SERVER SHUTDOWN SIGNAL RECIEVED!\n\n");
+        serverRunningStatus = False;
 
-        # so we first switch it off, then make another dummy socket and then close it 
-        # and then as result, the serverRunningStatus will be false the next time it iterates
-        # so it will k*ll itself there
-    except:
-        pass;
+    TARGET_PORTS = [PORT, TLS_PORT];
+
+    for port in TARGET_PORTS:
+        try:
+            dummyEndpoint_v4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM);
+            dummyEndpoint_v4.settimeout(0.5); # Don't hang if the server is already dead
+            dummyEndpoint_v4.connect(('127.0.0.1', port)); 
+            dummyEndpoint_v4.close();
+        except Exception as IPv4_EXCEPTION:
+            print(f"[+INFO] - IPv4 dummy exception - {IPv4_EXCEPTION}");
+
+        try:
+            dummyEndpoint_v6 = socket.socket(socket.AF_INET6, socket.SOCK_STREAM);
+            dummyEndpoint_v6.settimeout(0.5);
+            dummyEndpoint_v6.connect(('::1', port)); 
+            dummyEndpoint_v6.close();
+        except Exception as IPv6_EXCEPTION:
+            print(f"[+INFO] - IPv6 dummy exception - {IPv6_EXCEPTION}");
 
 def getMIMEtype(filePath: str):
     mimeType, encodeType = mimetypes.guess_type(filePath);
@@ -288,29 +339,29 @@ def PARSE_HTTP_REQUEST(requestBytes: bytes): # TCP returns raw bytes
     filePath = requestLineParts[1] if len(requestLineParts) > 1 else '/';
     HTTP_version = requestLineParts[2] if len(requestLineParts) > 2 else 'HTTP/1.1'
 
-    headersDict = {};
+    headersList = {};
     for aSingularLine in headerLines[1:]:
         if ':' in aSingularLine:
             key, value = aSingularLine.split(':', 1);
-            headersDict[key.strip().lower()] = value.strip();
+            headersList[key.strip().lower()] = value.strip();
 
     return {
         'method': requestMethod,
         'path': filePath,
         'version': HTTP_version,
-        'headersDict': headersDict,
+        'headersList': headersList,
         'body': HTTP_bodyPart
     };
 
-def READ_FULL_HTTP_REQUEST(socketObj: socket.socket, headersDict, initialBody: bytes) -> bytes:
-    HTTP_contentLength: int = int(headersDict.get('content-length', 0));
+def READ_FULL_HTTP_REQUEST(socketObj: socket.socket, headersList, initialBody: bytes) -> bytes:
+    HTTP_contentLength: int = int(headersList.get('content-length', 0));
     HTTP_currentLength: int = len(initialBody);
 
     # if HTTP_currentLength > HTTP_contentLength:
     if HTTP_currentLength >= HTTP_contentLength:
         return (initialBody[:HTTP_contentLength])
 
-    HTTP_bodyParts = [initialBody];
+    HTTP_bodyParts: list = [initialBody];
 
     while HTTP_currentLength < HTTP_contentLength:
         HTTP_remainingContent = (HTTP_contentLength - HTTP_currentLength);
@@ -333,28 +384,43 @@ def BUILD_HTTP_RESPONSE(statusCode, contentType, contentLength, encoding = 'id',
 
     statusText = statusMessages.get(statusCode, '{{something went ambiguous happened here}}'); 
 
-    headersDict = [
+    # from email.utils import formatdate; # inline import or something?
+    headersList = [
         f"HTTP/1.1 {statusCode} {statusText}",
         f"Content-Type: {contentType}",
         f"Content-Length: {contentLength}",
-        f"Content-Encoding: {encoding}",
-        f"Connection: {connection}"
+        f"Connection: {connection}",
+        f"Server: IsoAris_xTCP",
+        f"Date: {formatdate(usegmt=True)}"
     ];
 
     # if (encoding != 'identity'):
-    #    headersDict.append(f"Content-Encoding: {encoding}");
+    #    headersList.append(f"Content-Encoding: {encoding}");
 
-    headersDict.append('\r\n');
+    headersList.append('\r\n');
 
-    return ('\r\n'.join(headersDict).encode('utf-8'));
+    return ('\r\n'.join(headersList).encode('utf-8'));
 
-def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
-    print(f"[+INFO]: Client connection instantiated: {clientAddress}")
+def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress, isTLS = False, isIPv6 = False):
+    print(f"[+INFO]: Client connection instantiated: {clientAddress}");
+    # connection.settimeout(5);
 
-    connection.settimeout(5)
+    startTime = time.time(); # idk what type annotation returns here
+    protocolUtilized: str = "HTTPS" if isTLS else "HTTP";
+    IPvX: str = "IPv6" if isIPv6 else "IPv4";
+
+    print(f"\n[+CONNECT]: {protocolUtilized}/{IPvX} from {clientAddress}");
+
+    sessionID = SESSION_MANAGER.CREATE_NEW_SESSION(clientAddress);
+    IPADDR = clientAddress[0];
+    geoLocation = GET_CLIENT_GEOLOC(IPADDR);
+
+    connection.settimeout(5);
 
     try:
         while serverRunningStatus:
+            TXN_start = startTime;
+
             try:
                 clientData = connection.recv(BUFFER_SIZE)
                 if not clientData:
@@ -367,39 +433,43 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
 
             print(f"[+INFO]: {clientAddress} - {clientRequest['method']} {clientRequest['path']}");
 
-            if 'content-length' in clientRequest['headersDict']:
+            userAgent = clientRequest['headersList'].get('user-agent', '');
+            browserUsed = PARSE_USER_AGENT(userAgent);
+            SESSION_MANAGER.UPDATE_SESSION(sessionID, userAgent, geoLocation);
+
+            if 'content-length' in clientRequest['headersList']:
                 clientRequest['body'] = READ_FULL_HTTP_REQUEST(
                     connection,
-                    clientRequest['headersDict'],
+                    clientRequest['headersList'],
                     clientRequest['body']
                 );
 
                 print(f"[++DEBUG_LOG]: Body received ({len(clientRequest['body'])} bytes)");
 
-            # connectionRequest = clientRequest['headersDict'].get('connection', '').lower();
+            # connectionRequest = clientRequest['headersList'].get('connection', '').lower();
             # connectionLifeStatus = not (
             #    clientRequest['version'] == 'HTTP/1.0' and connectionRequest != 'keep-alive'
             # );
 
-            connectionRequest = clientRequest['headersDict'].get('connection', '').lower;
+            connectionRequest = clientRequest['headersList'].get('connection', '').lower();
 
             if clientRequest['version'] == 'HTTP/1.1':
                 connectionLifeStatus = (connectionRequest != 'close');
             else:
                 connectionLifeStatus = (connectionRequest == 'keep-alive');
 
-            filePath = os.path.join(DOC_ROOT, clientRequest['path'].lstrip('/'));
+            # filePath = os.path.join(DOC_ROOT, clientRequest['path'].lstrip('/'));
             statusCode = 200;
             contentType = "text/html";
 
-            if '..' in clientRequest['path']:
+            if '..' in clientRequest['path']: # this is bad
                 statusCode = 404;
                 responseBody = b"<h1>404 - Not Found</h1>";
 
-            elif os.path.exists(filePath) and os.path.isfile(filePath):
-                contentType = getMIMEtype(filePath);
-                with open(filePath, 'rb') as f:
-                    responseBody = f.read();
+            # elif os.path.exists(filePath) and os.path.isfile(filePath):
+            #    contentType = getMIMEtype(filePath);
+            #    with open(filePath, 'rb') as f:
+            #        responseBody = f.read();
 
             else:
                 responseBody = f"""
@@ -413,7 +483,7 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
                 </html>
                 """.encode();
 
-            acceptEncoding = clientRequest['headersDict'].get('accept-encoding', '');
+            acceptEncoding = clientRequest['headersList'].get('accept-encoding', '');
             compressedBody, encodingType = COMPRESS_RESPONSE(responseBody, acceptEncoding);
 
             responseHeaders = BUILD_HTTP_RESPONSE(
@@ -426,6 +496,20 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
 
             connection.sendall(responseHeaders + compressedBody);
 
+            TXN_end = time.time();
+            duration = ((TXN_end - TXN_start) * 1000);
+            
+            TRANSACTION_LOGGER.LOG_ENTRY({
+                'session': sessionID, 'client': str(clientAddress), 'ip': clientAddress,
+                'method': clientRequest['method'], 'path': clientRequest['path'],
+                'status': statusCode, 'size': len(compressedBody),
+                'browser': browserUsed['browser'], 'version': browserUsed['version'],
+                'os': browserUsed['os'], 'device': browserUsed['device'],
+                'location': geoLocation['location'], 'country': geoLocation['country'],
+                'duration': duration, 'protocol': protocolUtilized, 'ip_version': IPvX,
+                'tls': isTLS, 'encoding': encodingType
+            });
+
             if not connectionLifeStatus:
                 break;
 
@@ -433,21 +517,62 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress):
         print(f"[!ERROR]: there was some problem handling the connection - {connexHandlingERR}");
 
     finally:
-        connection.close()
-        print(f"[+INFO]: connection closed {clientAddress}");
+        connection.close();
+        totalTime = (time.time() - TXN_start) * 1000; # TXN_start is possibly unbound?
+        print(f"[+INFO]: connection closed {clientAddress} | Total time elapsed: {totalTime}");
 
-def START_LOOPBACK_SERVER():
-    # https://docs.python.org/3/library/socket.html
-    serverEndpoint: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM);
-    serverEndpoint.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
-
-    # iso.bind((HOST_SERVER_IPADDR, PORT));
+def CREATE_TLS_CONTEXT() -> Optional[ssl.SSLContext]:
+    if not os.path.exists(CERTIFICATION_FILE) or not os.path.exists(KEY_FILE):
+        print("[!TLS_LOG]: there was some problem with TLS certification");
+        print("[!TLS_LOG]: Generate: openssl req -x509 -newkey rsa:4096 -nodes -out {CERT_FILE} -keyout {KEY_FILE} -days 365");
+        return None;
 
     try:
-        serverEndpoint.bind((HOST_SERVER_IPADDR, PORT));
+        TLS_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);
+        TLS_context.load_cert_chain(certfile=CERTIFICATION_FILE, keyfile=KEY_FILE);
+        TLS_context.minimum_version = ssl.TLSVersion.TLSv1_2;
+        TLS_context.set_ciphers('ECDHE+AESGCM:!aNULL:!MD5');
+        TLS_context.set_alpn_protocols(['h2', 'http/1.1']);
+     
+        print(f"[+TLS]: Context created with ALPN (h2, http/1.1)");
+        print(f"[+TLS]: Context created successfully.");
+        return (TLS_context);
+    
+    except Exception as e:
+        print(f"[!ERROR]: TLS setup failed - {e}");
+        return (None);
+
+def START_LOOPBACK_SERVER(isUsingIPv6 = False, isUsingTLS = False): 
+    if isUsingIPv6:
+        serverEndpoint = socket.socket(socket.AF_INET6, socket.SOCK_STREAM);
+        clientAddress = (HOST_SERVER_IPv6, TLS_PORT if isUsingTLS else PORT);
+        IPvX_VERSION = "IPv6";
+    # https://docs.python.org/3/library/socket.html
+
+    else:
+        serverEndpoint: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM);
+        clientAddress = (HOST_SERVER_IPv4, TLS_PORT if isUsingTLS else PORT);
+        IPvX_VERSION = "IPv4";
+
+    serverEndpoint.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
+    # iso.bind((HOST_SERVER_IPv4, PORT));
+
+    SSL_CONTEXT = None;
+    if isUsingTLS:
+        SSL_CONTEXT = CREATE_TLS_CONTEXT();
+        
+        if not SSL_CONTEXT:
+            print(f"[!ERROR]: could not instantiate TLS | ceritification error?");
+            return;
+
+    try:
+        serverEndpoint.bind((clientAddress));
         serverEndpoint.listen(5);
 
-        print(f"[~SERVER]: listening on http://{HOST_SERVER_IPADDR}:{PORT}");
+        protocolUsed = "https" if isUsingTLS else "http";
+        port = TLS_PORT if isUsingTLS else PORT;
+
+        print(f"[~SERVER]: listening on {protocolUsed}://{clientAddress[0]}:{clientAddress[1]}");
         print(f"[~SERVER]: input SIGINT for proper closure");
 
         signal.signal(signal.SIGINT, interruptSignalHandler);
@@ -456,6 +581,20 @@ def START_LOOPBACK_SERVER():
                 try:
                     # x = serverEndpoint.accept();
                     clientConnection, clientAddress = serverEndpoint.accept(); # server ssocket will accept incoming connxs 
+
+                    if isUsingTLS:
+                        if SSL_CONTEXT:
+                            try:
+                                clientConnection = SSL_CONTEXT.wrap_socket(clientConnection, server_side=True);
+                                print(f"[~SERVER]: TLS handshake successful with {clientAddress}");
+                            except Exception as ssl_error:
+                                print(f"[!TLS]: TLS handshake failed - {ssl_error}");
+                                clientConnection.close();
+                                continue;
+                        else:
+                            print("[!TLS]: No context found, closing connection.");
+                            clientConnection.close();
+                            continue;
 
                     # every demultiplex thread will execute HANDLE_CLIENT_CONNECTION(clientConnection, clientAddress); 
                     clientThread = threading.Thread(
@@ -481,4 +620,11 @@ def START_LOOPBACK_SERVER():
         print(f"[~SERVER]: server stopped");
 
 if __name__ == "__main__":
-    START_LOOPBACK_SERVER();
+    START_LOOPBACK_SERVER(isUsingTLS=True);
+    t2 = threading.Thread(
+        target=START_LOOPBACK_SERVER, 
+        args=(False, True), 
+        daemon=True
+    )
+
+    t2.start()
