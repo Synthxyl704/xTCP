@@ -1,4 +1,5 @@
-# xTCP - its NOT a TCP!
+# xTCP - its not a TCP!
+Well, it is actually an HTTP/1.1 server instead.
 
 Pretty simple, all you need to do is git clone -> python main.py ->  browser.
 
