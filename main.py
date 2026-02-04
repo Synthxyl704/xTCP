@@ -44,8 +44,8 @@ TLS_PORT: int = 8443;
 # DOC_ROOT: str = './catgirl';
 BUFFER_SIZE: int = 4096;
 
-CERTIFICATION_FILE: str = 'server.crt';
-KEY_FILE: str = 'server.key';
+CERTIFICATION_FILE: str = 'server.crt'; # locally generate one 
+KEY_FILE: str = 'server.key'; # this thing too, sufficies in one command 
 
 serverRunningStatus: bool = True; # why is the T captial ew
 
@@ -98,13 +98,13 @@ class transactionLogger:
         self.threadLock = threading.Lock();
 
     def LOG_ENTRY(self, data: Dict):
-        with self.threadLock: # atomic logging + auto release
+        with self.threadLock: # atomic logging + auto release, basically python's RAII 
             timestamp = datetime.now().isoformat();
             logEntry = {'timestamp': timestamp, **data};
-
-            print(f"[#TxN]: ");
+            
+            print(f"[$TxN]: ");
             print(f"Session: {logEntry.get('session')} | Client: {logEntry.get('client')}");
-            print(f"{logEntry.get('method')} {logEntry.get('path')} → {logEntry.get('status')}");
+            print(f"{logEntry.get('method')} {logEntry.get('path')} -> {logEntry.get('status')}");
             print(f"Browser: {logEntry.get('browser')} | OS: {logEntry.get('os')} | Device: {logEntry.get('device')}");
             print(f"Location: {logEntry.get('location')} | Size: {logEntry.get('size')}b | Time: {logEntry.get('duration'):.2f}ms");
             print(f"");
@@ -226,7 +226,7 @@ def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]: # Dict[KT, VT]
 # ::1        localhost ip6-localhost ip6-loopback
 # [X]        [Y]
 # # This host address
-# 127.0.1.1  isoxiavant-vostro3520
+# 127.0.1.1  
 
 def PRINT_HOST_FILE_SETUP() -> Optional[None]:  
     # 127.0.0.1    localhost + isodns.local
@@ -263,7 +263,7 @@ def interruptSignalHandler(sigRecieved, frame) -> str:
     for port in TARGET_PORTS:
         try:
             dummyEndpoint_v4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM);
-            dummyEndpoint_v4.settimeout(0.1); # Reduced timeout for minimal latency
+            dummyEndpoint_v4.settimeout(0.1); # reduced timeout for minimal latency
             dummyEndpoint_v4.connect(('127.0.0.1', port)); 
             dummyEndpoint_v4.close();
         except Exception:
@@ -304,7 +304,7 @@ def COMPRESS_RESPONSE(data: bytes, encodeType: str) -> tuple[bytes, str]:
     return (data, 'identity'); 
 
 def GET_CLIENT_GEOLOC(clientIP: str):
-    if clientIP in ['127.0.0.1', '::1', 'localhost', 'local']: # i sure hope the dot acts as a delimter for differentiation
+    if clientIP in ['127.0.0.1', '::1', 'localhost', 'local', 'isodns']: # i sure hope the dot acts as a delimter for differentiation
         return {
             'ip': clientIP,
             'location': 'localhost',
@@ -605,4 +605,3 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, interruptSignalHandler);
     while serverRunningStatus:
         time.sleep(1);
-
