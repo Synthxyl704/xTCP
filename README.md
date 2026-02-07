@@ -26,13 +26,13 @@ Run in browser's search (any one or discriminate in seperate tabs, program uses 
 
 > [!NOTE]
 > Now yes there might be some TLS issues in your code when you run it, but I will not really assume youre interested enough here to generate your own OpenSSL certificate. <br>
-> So you are allowed to use the loopback address w/ HTTP only as an alternative for quick checking / working.
+> So you are allowed to use the loopback address w/ HTTP only as an alternative for quick checking / working as well.
 
 OpenSSL command to generate a self-signed certificate (-x509) and a 4096-bit RSA key (--newkey rsa:4096) as required by the code:
 ```
 openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
 ```
 
-[!WARNING]
-(This) self-signed certificate/s will trigger some browser security warnings which is to be expected for locally signed shit. <br>
+> [!WARNING]
+> (This) self-signed certificate/s will trigger some browser security warnings which is to be expected for locally signed shit. <br>
 Just click "Advanced" > "Proceed" to bypass.
