@@ -12,10 +12,8 @@ Run main:
 python main.py
 ```
 
-> [!NOTE]
+> [!WARN]
 > Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want.<br> <br>
-> Now yes there might be some TLS issues in your code when you run it, but I wont really assume youre interested enough to generate your own OpenSSL certificate for the sake of this project. <br>
-> So you are allowed to use the loopback address w/ HTTP only as an alternative for quick checking / working.
 
 
 Run in browser's search (any one or discriminate in seperate tabs, program uses threads for handling it so it will work anyway):
@@ -27,3 +25,6 @@ Run in browser's search (any one or discriminate in seperate tabs, program uses 
 | HTTPS    | `https://127.0.0.1:8443` | `server.crt` + `server.key` |
 | HTTPS    | `https://[::1]:8443`     | `server.crt` + `server.key` |
 
+> [!NOTE]
+> Now yes there might be some TLS issues in your code when you run it, but I wont really assume youre interested enough to generate your own OpenSSL certificate for the sake of this project. <br>
+> So you are allowed to use the loopback address w/ HTTP only as an alternative for quick checking / working.
