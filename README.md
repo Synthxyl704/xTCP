@@ -13,7 +13,7 @@ python main.py
 ```
 
 > [!NOTE]
-> Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want.<br>
+> Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want.<br> <br>
 > Now yes there might be some TLS issues in your code when you run it, but I wont really assume youre interested enough to generate your own OpenSSL certificate for the sake of this project. <br>
 > So you are allowed to use the loopback address w/ HTTP only as an alternative for quick checking / working.
 
