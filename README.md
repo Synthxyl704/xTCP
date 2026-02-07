@@ -19,13 +19,11 @@ python main.py
 
 
 Run in browser's search (any one or discriminate in seperate tabs, program uses threads for handling it so it will work anyway):
-```
-http://127.0.0.1:8080
-http://[::1]:8080
-```
 
-or if you have `server.crt` and `server.key` locally generated
-```
-https://127.0.0.1:8443
-https://[::1]:8443
-```
+| Protocol | Address                  | Requirements                |
+| -------- | ------------------------ | --------------------------- |
+| HTTP     | `http://127.0.0.1:8080`  | None                        |
+| HTTP     | `http://[::1]:8080`      | None                        |
+| HTTPS    | `https://127.0.0.1:8443` | `server.crt` + `server.key` |
+| HTTPS    | `https://[::1]:8443`     | `server.crt` + `server.key` |
+
