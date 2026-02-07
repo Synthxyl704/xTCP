@@ -12,6 +12,12 @@ Run main:
 python main.py
 ```
 
+> [!NOTE]
+> Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want.<br>
+> Now yes there might be some TLS issues in your code when you run it, but I wont really assume youre interested enough to generate your own OpenSSL certificate for the sake of this project. <br>
+> So you are allowed to use the loopback address w/ HTTP only as an alternative for quick checking / working.
+
+
 Run in browser's search (any one or discriminate in seperate tabs, program uses threads for handling it so it will work anyway):
 ```
 http://127.0.0.1:8080
@@ -23,7 +29,3 @@ or if you have `server.crt` and `server.key` locally generated
 https://127.0.0.1:8443
 https://[::1]:8443
 ```
-Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want.
-
-Now yes there might be some TLS issues in your code but I wont really assume youre interested enough to run your own OpenSSL certificate. <br>
-So, for now, just use the loopback address w/ HTTP.
