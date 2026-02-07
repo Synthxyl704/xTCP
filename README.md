@@ -1,8 +1,7 @@
 # xTCP - its not a TCP!
 Well, **it is actually an HTTP/1.1 server** instead.
 
-Pretty simple, just follow these steps: <br>
-
+## Run locally (loopback is used):
 Git clone the repo:
 ```
 git clone github.com/Synthxyl704/xTCP
