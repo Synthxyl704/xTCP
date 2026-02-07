@@ -23,3 +23,7 @@ or if you have `server.crt` and `server.key` locally generated
 https://127.0.0.1:8443
 https://[::1]:8443
 ```
+Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want.
+
+Now yes there might be some TLS issues in your code but I wont really assume youre interested enough to run your own OpenSSL certificate. <br>
+So, for now, just use the loopback address w/ HTTP.
