@@ -352,29 +352,29 @@ def CREATE_TLS_CONTEXT() -> Optional[ssl.SSLContext]:
         print(f"[!TLS_FAIL]: {TLS_CONTEXT_CREATION_ERROR}");
         return None;
 
-def START_LOOPBACK_SERVER(ip, port, isTLS=False):
-    family = socket.AF_INET6 if ':' in ip else socket.AF_INET;
+def START_LOOPBACK_SERVER(IPaddr, port, isTLS=False):
+    family = socket.AF_INET6 if ':' in IPaddr else socket.AF_INET;
     server = socket.socket(family, socket.SOCK_STREAM);
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
      
     try:
-        server.bind((ip, port));
+        server.bind((IPaddr, port));
 
     except OSError as PORT_BIND_ERROR:
-        print(f"[!BIND_ERR]: Could not bind to {ip}:{port} - {PORT_BIND_ERROR}");
+        print(f"[!BIND_ERR]: Could not bind to {IPaddr}:{port} - {PORT_BIND_ERROR}");
         return;
 
     server.listen(128);
     server.setblocking(False); # non blocking, program will execute regardless of operation execution
  
-    sel = selectors.DefaultSelector(); # selectors for I/O multiplexing
-    sel.register(server, selectors.EVENT_READ);
+    mostEfficientSelector = selectors.DefaultSelector(); # selectors for I/O multiplexing
+    mostEfficientSelector.register(server, selectors.EVENT_READ);
 
     TLS_CTX = CREATE_TLS_CONTEXT() if isTLS else None;
-    print(f"[*] Serving {('HTTPS' if isTLS else 'HTTP')} on {ip}:{port}");
+    print(f"[*] Serving {('HTTPS' if isTLS else 'HTTP')} on {IPaddr}:{port}");
 
     while serverRunningStatus:
-        events = sel.select(timeout=1);
+        events = mostEfficientSelector.select(timeout=1);
         for key, mask in events:
             try:
                 conn, addr = server.accept();
@@ -386,7 +386,6 @@ def START_LOOPBACK_SERVER(ip, port, isTLS=False):
                         conn.close();
                         continue;
                 
-                # We still use threads for handling the logic to keep the selector loop fast
                 threading.Thread(
                     target=HANDLE_CLIENT_CONNECTION,
                     args=(conn, addr, isTLS, family == socket.AF_INET6),
@@ -406,19 +405,22 @@ def interruptSignalHandler(sig, frame):
     serverRunningStatus = False;
 
 if __name__ == "__main__":
-    # [FIX]: Removed the conflict between 127.0.0.1 and 0.0.0.0 on the same port.
-    # Prioritizing specific interfaces to avoid Errno 98.
-    configs = [
+    configs = [ # remove multi-port conflict by a clear dual-stack listed tuple structure
         ('127.0.0.1', 8080, False), # HTTP IPv4
         ('::1',       8080, False), # HTTP IPv6
         ('0.0.0.0',   8443, True),  # HTTPS All IPv4 (includes 127.0.0.1)
         ('::1',       8443, True)   # HTTPS IPv6
     ];
 
-    for ip, port, tls in configs:
-        t = threading.Thread(target=START_LOOPBACK_SERVER, args=(ip, port, tls), daemon=True);
-        t.start();
+    for IPaddr, portUsed, TLS_booleanFlag in configs:
+        singularThread = threading.Thread(
+            target = START_LOOPBACK_SERVER,
+            args = (IPaddr, portUsed, TLS_booleanFlag), 
+            daemon = True
+        );
+        singularThread.start();
 
     signal.signal(signal.SIGINT, interruptSignalHandler);
+    
     while serverRunningStatus:
         time.sleep(1);
