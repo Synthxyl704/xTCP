@@ -1,7 +1,7 @@
 # xTCP - its not a TCP!
 Well, **it is actually an HTTP/1.1 server** instead.
 
-Pretty simple, just follow these steps: <br><br>
+Pretty simple, just follow these steps: <br>
 
 Git clone the repo:
 ```
