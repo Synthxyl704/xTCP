@@ -1,7 +1,8 @@
 # xTCP - its not a TCP!
 Well, **it is actually an HTTP/1.1 server** instead.
 
-Pretty simple, all you need to do is:
+Pretty simple, just follow these steps: <br><br>
+
 Git clone the repo:
 ```
 git clone github.com/Synthxyl704/xTCP
