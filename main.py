@@ -318,8 +318,9 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fal
             if (not keepAlive):
                 break;
 
-    except Exception as e:
-        print(f"[!ERR]: {e}");
+    except Exception as SOME_SERVER_ERROR:
+        print(f"[!ERR]: {SOME_SERVER_ERROR}");
+    
     finally:
         try:
             connection.shutdown(socket.SHUT_RDWR);
