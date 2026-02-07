@@ -13,7 +13,7 @@ python main.py
 ```
 
 > [!WARNING]
-> Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want.<br> <br>
+> Didn't try `0.0.0.0` yet, maybe you can experiment with it if you want. <br>
 
 Run in browser's search (any one or discriminate in seperate tabs, program uses threads for handling it so it will work anyway):
 
