@@ -25,20 +25,31 @@ BUFFER_SIZE: int = 4096;
 CERTIFICATION_FILE: str = 'server.crt';
 KEY_FILE: str = 'server.key';
 
-HTTP2_PREFACE: bytes = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-HTTP2_FRAME_HEADER_LEN: int = 9;
-HTTP2_SETTINGS_MAX_CONCURRENT_STREAMS: int = 0x3;
-HTTP2_SETTINGS_INITIAL_WINDOW_SIZE: int = 0x4;
-HTTP2_FLAG_END_STREAM: int = 0x1;
-HTTP2_FLAG_END_HEADERS: int = 0x4;
-HTTP2_FLAG_ACK: int = 0x1;
-HTTP2_FRAME_DATA: int = 0x0;
-HTTP2_FRAME_HEADERS: int = 0x1;
-HTTP2_FRAME_SETTINGS: int = 0x4;
-HTTP2_FRAME_PUSH_PROMISE: int = 0x5;
-HTTP2_FRAME_PING: int = 0x6;
-HTTP2_FRAME_GOAWAY: int = 0x7;
-HTTP2_FRAME_WINDOW_UPDATE: int = 0x8;
+# HTTP/2 contains binary frames
+# HTTP/1.1 contains textual content 
+# a frame is a small structured binary message to comm over connection (basically network packets)
+
+HTTP2_PREFACE: bytes = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"; # 24-byte/octet sequence | client conn preface
+HTTP2_FRAME_HEADER_LEN: int = 9;                            # every HTTP/2 begins with a 9 byte header
+HTTP2_SETTINGS_MAX_CONCURRENT_STREAMS: int = 0x3;           # maximum parallel user connection streams
+HTTP2_SETTINGS_INITIAL_WINDOW_SIZE: int = 0x4;              # how much data can be set before WINDOW_UPDATE   
+HTTP2_FLAG_END_STREAM: int = 0x1;                           # final data frame 
+HTTP2_FLAG_END_HEADERS: int = 0x4;                          # this frame completes the header sect, headers may span multiple frames 
+HTTP2_FLAG_ACK: int = 0x1;                                  # acknowledgement
+HTTP2_FRAME_DATA: int = 0x0;                                # carries response after headers
+HTTP2_FRAME_HEADERS: int = 0x1;                             # carries HTTP headers compressed via HPACK
+HTTP2_FRAME_SETTINGS: int = 0x4;                            # idk
+HTTP2_FRAME_PUSH_PROMISE: int = 0x5;                        # for server push
+HTTP2_FRAME_PING: int = 0x6;                                # 8-byte payload latency check to measure RTT
+HTTP2_FRAME_GOAWAY: int = 0x7;                              # [error_code | last processed stream ID] - used during connection shutdown
+HTTP2_FRAME_WINDOW_UPDATE: int = 0x8;                       # thing that sends bytes or something
+
+# https://www.rfc-editor.org/rfc/rfc7540#section-6.9
+# WINDOW_UPDATE is related to "window size" which informs the client how many bytes its "prepared to recieve"
+# (SO) - Flow control, on the other hand, is about how many data bytes each endpoint can send on the connection. 
+# (SO) - The only frame that is subject to flow control is the DATA frame.
+# (SO) - Flow control is a necessary mechanism that multiplexed protocols should implement.
+
 
 serverRunningStatus: bool = True;
 
@@ -216,6 +227,13 @@ def BUILD_HTTP_RESPONSE(statusCode, contentType, contentLength, encoding='identi
 
     return ('\r\n'.join(headers) + '\r\n\r\n').encode('utf-8');
 
+# this is an HPACK static table for HTTP/2 header compression
+# we know that HPACK is the header compression algorithm used by HTTP/2
+# so basically this thing compresses it using this static table... 
+# ...which becomes dynamically built n sent later 
+# this uses huffman encoding
+# exactly 61 entries
+#[:<text>] are called "pseudo-headers" and they replace HTTP/1.1 headers
 HPACK_STATIC_TABLE: List[Tuple[str, str]] = [
     (':authority', ''), (':method', 'GET'), (':method', 'POST'), (':path', '/'), (':path', '/index.html'),
     (':scheme', 'http'), (':scheme', 'https'), (':status', '200'), (':status', '204'), (':status', '206'),
@@ -231,43 +249,59 @@ HPACK_STATIC_TABLE: List[Tuple[str, str]] = [
     ('transfer-encoding', ''), ('user-agent', ''), ('vary', ''), ('via', ''), ('www-authenticate', '')
 ];
 
-def HPACK_DECODE_INTEGER(data: bytes, pos: int, prefixBits: int) -> Tuple[int, int]:
-    maxPrefix = (1 << prefixBits) - 1;
-    value = data[pos] & maxPrefix;
-    pos += 1;
-    if value < maxPrefix:
-        return value, pos;
-    shift = 0;
-    while pos < len(data):
-        b = data[pos];
+def HPACK_DECODE_INTEGER(byteArrayData: bytes, currentPosition: int, prefixBits: int) -> Tuple[int, int]:
+    maxPrefix = ((1 << prefixBits) - 1);                # largest num fitting in those bits
+    value = byteArrayData[currentPosition] & maxPrefix;
+    currentPosition += 1;
+    
+    if (value < maxPrefix):
+        return value, currentPosition;
+
+    shift: int = 0;
+    
+    while currentPosition < len(byteArrayData):
+        # AI wrote this, i do not know the logic used here but it works
+        b = byteArrayData[currentPosition];
         pos += 1;
         value += (b & 0x7f) << shift;
+        
         if (b & 0x80) == 0:
             break;
+        
         shift += 7;
-    return value, pos;
+    
+    return (value, currentPosition);
 
 def HPACK_ENCODE_INTEGER(value: int, prefixBits: int, prefixMask: int = 0) -> bytes:
     maxPrefix = (1 << prefixBits) - 1;
+    
     if value < maxPrefix:
         return bytes([prefixMask | value]);
+    
     output = bytearray([prefixMask | maxPrefix]);
     value -= maxPrefix;
+    
     while value >= 128:
         output.append((value % 128) + 128);
         value //= 128;
+    
     output.append(value);
     return bytes(output);
 
 def HPACK_DECODE_STRING(data: bytes, pos: int) -> Tuple[str, int]:
     if pos >= len(data):
         return '', pos;
+    
     huffman = (data[pos] & 0x80) != 0;
+    # HPACK_DECODE_INTEGER(byteArrayData: bytes, currentPosition: int, prefixBits: int) 
     length, pos = HPACK_DECODE_INTEGER(data, pos, 7);
+    
     raw = data[pos:pos + length];
     pos += length;
+    
     if huffman:
         return '', pos;
+
     return raw.decode('utf-8', errors='ignore'), pos;
 
 def HPACK_ENCODE_STRING(value: str) -> bytes:
@@ -276,43 +310,55 @@ def HPACK_ENCODE_STRING(value: str) -> bytes:
 
 def HPACK_GET_STATIC_HEADER(index: int) -> Tuple[str, str]:
     if index <= 0 or index > len(HPACK_STATIC_TABLE):
-        return '', '';
+        return '', ''; # edge case
+
     return HPACK_STATIC_TABLE[index - 1];
 
-def HPACK_FIND_STATIC_INDEX(name: str, value: str = None) -> int:
-    for idx, item in enumerate(HPACK_STATIC_TABLE, start=1):
-        if value is None:
+def HPACK_FIND_STATIC_INDEX(name: str, optionalValue: str = None) -> Union[None, int]: # value is optional because some tuples may return nothing
+    # enumerate() function adds a counter to each item in a list or any other iterable 
+    # returns a list of tuples containing the index position and the element for each element of the iterable
+    
+    for (idx, item) in enumerate(HPACK_STATIC_TABLE, start=1):
+        if optionalValue is None:
             if item[0] == name:
-                return idx;
+                return idx; # return name/key
         else:
-            if item[0] == name and item[1] == value:
-                return idx;
+            if (item[0] == name) and (item[1] == optionalValue):
+                return idx; # return it immediately
+
     return 0;
 
-def HPACK_DECODE_HEADER_BLOCK(data: bytes) -> Dict[str, str]:
+def HPACK_DECODE_HEADER_BLOCK(binaryData: bytes) -> Dict[str, str]:
     headers: Dict[str, str] = {};
     pos = 0;
-    while pos < len(data):
-        b = data[pos];
-        if b & 0x80:
-            index, pos = HPACK_DECODE_INTEGER(data, pos, 7);
+    
+    while pos < len(binaryData):
+        b = binaryData[pos];
+        
+        if b & 0x80: # if [LSB = 1]: 
+            index, pos = HPACK_DECODE_INTEGER(binaryData, pos, 7);
             name, value = HPACK_GET_STATIC_HEADER(index);
             if name:
                 headers[name] = value;
+            
             continue;
+        
+        # no idea again
         if (b & 0x40) or (b & 0x10) or (b & 0x00) == 0:
             if b & 0x40:
-                nameIndex, pos = HPACK_DECODE_INTEGER(data, pos, 6);
+                (nameIndex, pos) = HPACK_DECODE_INTEGER(binaryData, pos, 6);
             else:
-                nameIndex, pos = HPACK_DECODE_INTEGER(data, pos, 4);
+                (nameIndex, pos) = HPACK_DECODE_INTEGER(binaryData, pos, 4);
+            
             if nameIndex == 0:
-                name, pos = HPACK_DECODE_STRING(data, pos);
+                (name, pos) = HPACK_DECODE_STRING(binaryData, pos);
             else:
                 name, _ = HPACK_GET_STATIC_HEADER(nameIndex);
-            value, pos = HPACK_DECODE_STRING(data, pos);
+            (value, pos) = HPACK_DECODE_STRING(binaryData, pos);
+
             if name:
                 headers[name.lower()] = value;
-            continue;
+            continue;    
         break;
     return headers;
 
@@ -320,23 +366,31 @@ def HPACK_ENCODE_RESPONSE_HEADERS(headers: Dict[str, str]) -> bytes:
     output = bytearray();
     status = headers.get(':status', '200');
     statusIndex = HPACK_FIND_STATIC_INDEX(':status', status);
+    
     if statusIndex > 0:
         output.extend(HPACK_ENCODE_INTEGER(statusIndex, 7, 0x80));
+    
     for key, value in headers.items():
         if key == ':status':
             continue;
         nameIndex = HPACK_FIND_STATIC_INDEX(key.lower(), None);
+        
         if nameIndex > 0:
             output.extend(HPACK_ENCODE_INTEGER(nameIndex, 4, 0x00));
         else:
-            output.extend(HPACK_ENCODE_INTEGER(0, 4, 0x00));
+            output.extend(HPACK_ENCODE_INTEGER(0, 4, 0x00)); # append
             output.extend(HPACK_ENCODE_STRING(key.lower()));
+        
         output.extend(HPACK_ENCODE_STRING(str(value)));
+    
     return bytes(output);
 
 def BUILD_HTTP2_FRAME(frameType: int, flags: int, streamId: int, payload: bytes = b'') -> bytes:
     length = len(payload);
-    header = bytes([(length >> 16) & 0xff, (length >> 8) & 0xff, length & 0xff, frameType & 0xff, flags & 0xff]) + struct.pack('!I', streamId & 0x7fffffff);
+    header = bytes(
+        [(length >> 16) & 0xff, (length >> 8) & 0xff, length & 0xff, frameType & 0xff, flags & 0xff]
+    ) + struct.pack('!I', streamId & 0x7fffffff);
+
     return header + payload;
 
 def RECV_EXACT(connection: socket.socket, size: int) -> bytes:
@@ -350,20 +404,25 @@ def RECV_EXACT(connection: socket.socket, size: int) -> bytes:
 
 def READ_HTTP2_FRAME(connection: socket.socket) -> Optional[Tuple[int, int, int, bytes]]:
     header = RECV_EXACT(connection, HTTP2_FRAME_HEADER_LEN);
+    
     if len(header) != HTTP2_FRAME_HEADER_LEN:
         return None;
+
     length = (header[0] << 16) | (header[1] << 8) | header[2];
     frameType = header[3];
     flags = header[4];
     streamId = struct.unpack('!I', header[5:9])[0] & 0x7fffffff;
     payload = RECV_EXACT(connection, length) if length > 0 else b'';
+    
     if length > 0 and len(payload) != length:
         return None;
+
     return frameType, flags, streamId, payload;
 
 def BUILD_HTTP2_SETTINGS(maxConcurrentStreams: int = 128, initialWindow: int = 65535) -> bytes:
     payload = struct.pack('!HI', HTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, maxConcurrentStreams);
     payload += struct.pack('!HI', HTTP2_SETTINGS_INITIAL_WINDOW_SIZE, initialWindow);
+    
     return BUILD_HTTP2_FRAME(HTTP2_FRAME_SETTINGS, 0x0, 0, payload);
 
 def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=False, isIPv6=False):
@@ -373,6 +432,7 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
     pushedForParent: set[int] = set();
 
     preface = RECV_EXACT(connection, len(HTTP2_PREFACE));
+
     if preface != HTTP2_PREFACE:
         return;
 
@@ -381,10 +441,14 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
     serverSettingsAcked = False;
 
     while serverRunningStatus:
-        TXN_start = time.time();
-        frame = READ_HTTP2_FRAME(connection);
+        TXN_start: float = time.time();
+
+        # READ_HTTP2_FRAME(connection: socket.socket) -> Optional[Tuple[int, int, int, bytes]]
+        frame: Optional[Tuple[int, int, int, bytes]] = READ_HTTP2_FRAME(connection);
+
         if frame is None:
             break;
+        
         frameType, flags, streamId, payload = frame;
 
         if frameType == HTTP2_FRAME_SETTINGS:
@@ -413,11 +477,12 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
                 pos += 5;
             headerBlock = payload[pos:len(payload) - padLength if padLength > 0 else len(payload)];
             headers = HPACK_DECODE_HEADER_BLOCK(headerBlock);
-            streams[streamId] = {
+            streams[streamId] = { # streams: Dict[int, Dict] = {};
                 'headers': headers,
                 'body': b'',
                 'closed': bool(flags & HTTP2_FLAG_END_STREAM)
             };
+            
             if not (flags & HTTP2_FLAG_END_HEADERS):
                 continue;
             if not streams[streamId]['closed']:
@@ -439,15 +504,15 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
         if not clientSettingsAcked:
             continue;
 
-        reqHeaders = streams[streamId]['headers'];
+        reqHeaders = streams[streamId]['headers']; # streams: Dict[int, Dict] = {};
         method = reqHeaders.get(':method', 'GET');
         path = reqHeaders.get(':path', '/');
         userAgent = reqHeaders.get('user-agent', '');
         SESSION_MANAGER.UPDATE_SESSION(sessionID, userAgent);
 
         if '..' in path:
-            status = 404;
-            body = b"<h1>404 - Not Found</h1>";
+            status: int = 404;
+            body: bytes = b"<h1>ERR_404 - [..] detected in URL, cannot continute</h1>";
         else:
             status = 200;
             body = f"""
@@ -500,8 +565,9 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
                 </body>
                 </html>
                 """.encode("utf-8");
-
-        compressedBody, encType = COMPRESS_RESPONSE(body, reqHeaders.get('accept-encoding', ''));
+        
+        # COMPRESS_RESPONSE(data: bytes, encodeType: str) -> tuple[bytes, str]
+        (compressedBody, encType) = COMPRESS_RESPONSE(body, reqHeaders.get('accept-encoding', ''));
         responseHeaders = {
             ':status': str(status),
             'content-type': 'text/html',
@@ -509,6 +575,7 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
             'server': 'IsoAris_xTCP',
             'date': formatdate(usegmt=True)
         };
+
         if encType != 'identity':
             responseHeaders['content-encoding'] = encType;
         if isTLS:
@@ -518,20 +585,25 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
         connection.sendall(BUILD_HTTP2_FRAME(HTTP2_FRAME_HEADERS, HTTP2_FLAG_END_HEADERS, streamId, headerBlock));
         connection.sendall(BUILD_HTTP2_FRAME(HTTP2_FRAME_DATA, HTTP2_FLAG_END_STREAM, streamId, compressedBody));
 
-        if path == '/' and streamId not in pushedForParent and streamId % 2 == 1:
+        if (path == '/') and (streamId not in pushedForParent) and (streamId % 2 == 1):
             promisedStreamId = streamId + 2;
+            
             while promisedStreamId in streams or promisedStreamId <= streamId:
                 promisedStreamId += 2;
+            
             pushedForParent.add(streamId);
+
             pushHeaders = bytearray();
             pushHeaders.extend(HPACK_ENCODE_INTEGER(2, 7, 0x80));
             pushHeaders.extend(HPACK_ENCODE_INTEGER(7, 7, 0x80));
             pushHeaders.extend(HPACK_ENCODE_INTEGER(31, 6, 0x40));
             pushHeaders.extend(HPACK_ENCODE_STRING('/style.css'));
-            pushPayload = struct.pack('!I', promisedStreamId & 0x7fffffff) + bytes(pushHeaders);
+            
+            # pushPayload: Union[bytes] = struct.pack('!I', (promisedStreamId & 0x7fffffff)) + bytes(pushHeaders);
+            pushPayload: bytes = struct.pack('!I', promisedStreamId & 0x7ffffffff) + bytearray(pushHeaders);
             connection.sendall(BUILD_HTTP2_FRAME(HTTP2_FRAME_PUSH_PROMISE, HTTP2_FLAG_END_HEADERS, streamId, pushPayload));
-
             pushedBody = b"body{margin:0;padding:0}";
+            
             pushedHeaders = {
                 ':status': '200',
                 'content-type': 'text/css',
@@ -539,7 +611,9 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
                 'server': 'IsoAris_xTCP',
                 'date': formatdate(usegmt=True)
             };
+
             pushedHeaderBlock = HPACK_ENCODE_RESPONSE_HEADERS(pushedHeaders);
+            
             connection.sendall(BUILD_HTTP2_FRAME(HTTP2_FRAME_HEADERS, HTTP2_FLAG_END_HEADERS, promisedStreamId, pushedHeaderBlock));
             connection.sendall(BUILD_HTTP2_FRAME(HTTP2_FRAME_DATA, HTTP2_FLAG_END_STREAM, promisedStreamId, pushedBody));
 
@@ -565,11 +639,13 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fal
             HANDLE_HTTP2_CONNECTION(connection, clientAddress, isTLS, isIPv6);
         except Exception as HTTP2_SERVER_ERROR:
             print(f"[!ERR]: {HTTP2_SERVER_ERROR}");
+        
         finally:
             try:
                 connection.shutdown(socket.SHUT_RDWR);
             except:
                 pass;
+            
             connection.close();
         return;
 
@@ -701,9 +777,9 @@ def HANDLE_CLIENT_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fal
             pass;
         connection.close();
 
-def CREATE_TLS_CONTEXT() -> Optional[ssl.SSLContext]:
+def CREATE_TLS_CONTEXT() -> Union[ssl.SSLContext, None]:
     if not os.path.exists(CERTIFICATION_FILE):
-        return None;
+        return None; # should handle Nonetype
 
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);
@@ -730,6 +806,7 @@ def START_LOOPBACK_SERVER(IPaddr, port, isTLS=False):
     family = socket.AF_INET6 if ':' in IPaddr else socket.AF_INET;
     server = socket.socket(family, socket.SOCK_STREAM);
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
+    server.setsockopt
      
     try:
         server.bind((IPaddr, port));
