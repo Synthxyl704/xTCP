@@ -36,3 +36,10 @@ openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 
 > [!WARNING]
 > (This) self-signed certificate/s will trigger some browser security warnings which is to be expected for locally signed shit. <br>
 Just click "Advanced" > "Proceed" to bypass.
+
+## Logs
+
+| Date | LogNote |
+| ----     | ------------------------ | 
+| 14-02-2026 | Modularized shit into a common folder `/src` |
+| 13-02-2026     | Add HTTP/2 implementation  |
