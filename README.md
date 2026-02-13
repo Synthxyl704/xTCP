@@ -41,5 +41,5 @@ Just click "Advanced" > "Proceed" to bypass.
 
 | Date | LogNote |
 | ----     | ------------------------ | 
-| 14-02-2026 | Modularized shit into a common folder `/src` |
-| 13-02-2026     | Add HTTP/2 implementation  |
+| 14/02/2026 | Modularized shit into a common folder `/src` |
+| 13/02/2026 | Add HTTP/2 implementation  |
