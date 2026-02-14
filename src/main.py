@@ -312,7 +312,7 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
             isKeepAliveConnection= (
                 (connectionHeaderValue != "close")
                 if (parsedHTTPrequest["version"] == "HTTP/1.1")
-                else (connectionHeaderValue == "keep-alive");
+                else (connectionHeaderValue == "keep-alive")
             );
 
             if (".." in parsedHTTPrequest["path"]):
@@ -451,7 +451,7 @@ async def START_ASYNCHRONOUS_SERVER(
         clientConnectionHandler,
         host = serverHostAddr,
         port = serverPortNumeric, 
-        xSSL = TLScontext
+        ssl = TLScontext
     ));
 
     async with asyncServerInstance: 
