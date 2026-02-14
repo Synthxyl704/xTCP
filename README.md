@@ -1,5 +1,5 @@
 # xTCP - its not a TCP!
-Well, **it is actually an HTTP/1.1 server** instead.
+Well, **it is actually an HTTP/1.1 + HTTP/2 server** instead.
 
 ## Run locally (loopback is used):
 Git clone the repo:
