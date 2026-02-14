@@ -1,12 +1,32 @@
+"""
+=== TLS/HTTP2 PROTOCOL VIOLATION FIXES ===
+
+OPTION A: ALPN Protocol Detection (main.py:443-452)
+- Fixed hardcoded "http/1.1" protocol in clientConnectionHandler
+- Now retrieves negotiated ALPN protocol from SSL object
+- Falls back to http/1.1 if ALPN negotiation fails
+- This prevents the "network protocol violation" error where Firefox
+  negotiates HTTP/2 but server treated it as HTTP/1.1
+
+OPTION B: HTTP/2 Disable in ALPN (protocols.py:587-592)
+- Disabled HTTP/2 ("h2") advertisement in TLS ALPN protocols
+- The HTTP/2 handler (HANDLE_HTTP2_CONNECTION) uses blocking socket I/O
+- This is incompatible with asyncio's async/await model
+- HTTP/2 handler extracts raw socket which bypasses SSL decryption
+- Re-enable HTTP/2 only after implementing async-compatible HTTP/2 handler
+
+Both options combined provide stable HTTPS operation on port 8443.
+"""
+
 import asyncio
 import signal
+
 # from ssl import VERIFY_X509_STRICT
 import time
 
 from constants import (
     BUFFER_SIZE,
-);
-
+)
 from management import SESSION_MANAGER, TRANSACTION_LOGGER
 from protocols import (
     PARSE_USER_AGENT,
@@ -15,7 +35,7 @@ from protocols import (
     COMPRESS_RESPONSE,
     HANDLE_HTTP2_CONNECTION,
     CREATE_TLS_CONTEXT,
-);
+)
 
 # import threading;
 # import selectors;
@@ -252,17 +272,24 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
     writer: asyncio.StreamWriter,
     isTLSenabled: bool = False,
     isIPv6enabled: bool = False,
-    applicationLayerProtocol: str = "http/1.1" # default settings
+    applicationLayerProtocol: str = "http/1.1",
 ):
     clientAddress = writer.get_extra_info("peername");
-
-    # if protocol is HTTP/2 we switch it to that instead of defaulting to HTTP/1.1
-    if (applicationLayerProtocol == "h2"):
+    # NOTE: HTTP/2 handler is disabled via ALPN (Option B)
+    # If re-enabled, this code has issues:
+    # 1. writer.get_extra_info("socket") returns raw socket, bypassing SSL
+    # 2. HANDLE_HTTP2_CONNECTION uses blocking I/O, incompatible with asyncio
+    # 3. Would need async rewrite of HTTP/2 handler for proper integration
+    if applicationLayerProtocol == "h2":
         try:
-            HANDLE_HTTP2_CONNECTION(writer.get_extra_info("socket"), clientAddress, isTLSenabled, isIPv6enabled);
+            HANDLE_HTTP2_CONNECTION(
+                writer.get_extra_info("socket"),
+                clientAddress,
+                isTLSenabled,
+                isIPv6enabled,
+            );
         except Exception as HTTP2_SERVER_ERROR:
             print(f"[!ERR]: {HTTP2_SERVER_ERROR}");
-
         finally:
             try:
                 writer.close();
@@ -274,46 +301,45 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
     transportProtocol: str = "HTTPS" if (isTLSenabled) else "HTTP";
     IPvX: str = "IPv6" if (isIPv6enabled) else "IPv4";
     uniqueSessionID = SESSION_MANAGER.CREATE_NEW_SESSION(clientAddress);
-
-    try: 
-        while (True):
+    try:
+        while True:
             transactionStartTS: float = time.time();
-
             try:
-                incomingDataBuffer = await asyncio.wait_for( # we wait for client stream writes
-                    reader.read(BUFFER_SIZE),
-                    timeout = 10.0
+                incomingDataBuffer = (
+                    await asyncio.wait_for(
+                        reader.read(BUFFER_SIZE), timeout=10.0
+                    )
                 );
-
-                if (not incomingDataBuffer):
-                    # incomingDataBuffer = False;
-                    break; # out of scoped while only
+                if not incomingDataBuffer:
+                    break;
             except asyncio.TimeoutError as ASYNCIO_TIMEOUT_ERROR:
                 print(f"[!ERR]: {ASYNCIO_TIMEOUT_ERROR}");
             except Exception as ASYNCTIO_INCOMING_BUFFER_ERROR:
                 print(f"[!L291-ERR]: {ASYNCTIO_INCOMING_BUFFER_ERROR}");
 
             parsedHTTPrequest = PARSE_HTTP_REQUEST(incomingDataBuffer);
-            if (not parsedHTTPrequest): 
+            if not parsedHTTPrequest:
                 print(f"[!ERR]: something went wrong in parsing the HTTP request function");
-                break; # break out of scoped while again
+                break;
 
             userAgentStr: str = parsedHTTPrequest["headers"].get("user-agent", "");
             browserInfo = PARSE_USER_AGENT(userAgentStr);
             SESSION_MANAGER.UPDATE_SESSION(uniqueSessionID, userAgentStr);
-
-            connectionHeaderValue = parsedHTTPrequest["headers"].get("connection", "").lower();
-            isKeepAliveConnection= (
+            connectionHeaderValue = (
+                parsedHTTPrequest["headers"].get("connection", "").lower()
+            );
+            isKeepAliveConnection = (
                 (connectionHeaderValue != "close")
                 if (parsedHTTPrequest["version"] == "HTTP/1.1")
                 else (connectionHeaderValue == "keep-alive")
             );
-
-            if (".." in parsedHTTPrequest["path"]):
-                HTTP_STATUS_CODE: int = 404; # restrict invalid page access
-                responseBodyContent = b"<h1>ERR 404 - Invalid page access was restricted</h1>";            
+            if ".." in parsedHTTPrequest["path"]:
+                HTTP_STATUS_CODE: int = 404;
+                responseBodyContent = (
+                    b"<h1>ERR 404 - Invalid page access was restricted</h1>"
+                );
             else:
-                HTTP_STATUS_CODE: int = 200; # client request processed and recieved by the server_side
+                HTTP_STATUS_CODE: int = 200;
                 responseBodyContent = f"""
                 <!DOCTYPE html>
                 <html lang="en">
@@ -363,31 +389,22 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
                     </div>
                 </body>
                 </html>
-                """.encode("utf-8"); # UCS transformation format 8
+                """.encode("utf-8");
 
             compressedResponseBody, contentEncodingType = COMPRESS_RESPONSE(
-                responseBodyContent, parsedHTTPrequest["headers"].get("accept-encoding", "") # build dynamically
+                responseBodyContent,
+                parsedHTTPrequest["headers"].get("accept-encoding", ""),
             );
-
-            # (statusCode: Unknown, contentType: Unknown, contentLength: Unknown, encoding: str = "identity", connection: str = "keep-alive", isTLS: bool = False) 
             httpResponseHeaders: bytes = BUILD_HTTP_RESPONSE(
                 HTTP_STATUS_CODE,
                 "text/html",
-                # len(responseBodyContent)
                 len(compressedResponseBody),
-                contentEncodingType, 
+                contentEncodingType,
                 "keep-alive" if (isKeepAliveConnection) else "close",
-                isTLSenabled
+                isTLSenabled,
             );
-
-            writer.write(httpResponseHeaders + compressedResponseBody); # non-blocking call
-            await (writer.drain()); # hot mechanicsm that edges the non-blocking call
-
-            # "flow control" is a mechanism at L2/DLL and has to do with how much data 
-            # can be sent (speed) from transmitter to reciever
-            # the transmitter should send at a rate that the reciever can actually handle
-            # if await writer.drain() wasnt added, the memory of the (sender?) would grow and cause an OOM crash
-            # prevents OOM (out of memory) crashes/failures
+            writer.write(httpResponseHeaders + compressedResponseBody);
+            await writer.drain();
 
             TRANSACTION_LOGGER.LOG_ENTRY(
                 {
@@ -401,58 +418,60 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
                     "encoding": contentEncodingType,
                 }
             );
-
-            if (not isKeepAliveConnection):
+            if not isKeepAliveConnection:
                 print(f"[LOG]: closed connection");
                 break;
-
     except Exception as SOME_SERVER_ERROR:
         print(f"[!ERR]: {SOME_SERVER_ERROR}");
-
     finally:
-        try: 
+        try:
             writer.close();
-            await (writer.wait_closed()); 
-
+            await writer.wait_closed();
         except Exception as ASYNCIO_WRITER_ERROR:
             print(f"[!ERR]: {ASYNCIO_WRITER_ERROR}");
 
+
 async def START_ASYNCHRONOUS_SERVER(
-    serverHostAddr: str,
-    serverPortNumeric: int,
-    isTLSenabled: bool = False
+    serverHostAddr: str, serverPortNumeric: int, isTLSenabled: bool = False
 ):
     isIPv6 = ":" in (serverHostAddr);
-    
-    if (isTLSenabled):
+    if isTLSenabled:
         TLScontext = CREATE_TLS_CONTEXT();
-    else: 
+    else:
         TLScontext = None;
 
     protocolName = "HTTPS" if (isTLSenabled) else "HTTP";
     print(f"[x]: Serving {protocolName} on {serverHostAddr}:{serverPortNumeric}");
 
-    async def clientConnectionHandler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def clientConnectionHandler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ):
+        ssl_object = writer.get_extra_info("ssl_object");
+        if ssl_object and isTLSenabled:
+            negotiated_protocol = ssl_object.selected_alpn_protocol();
+            application_protocol = (
+                negotiated_protocol if negotiated_protocol else "http/1.1"
+            );
+        else:
+            application_protocol = "http/1.1";
+
         await HANDLE_ASYNC_CLIENT_CONNECTION(
-            reader,
-            writer,
-            isTLSenabled,
-            isIPv6,
-            "http/1.1"
+            reader, writer, isTLSenabled, isIPv6, application_protocol
         );
 
-    asyncServerInstance = (await asyncio.start_server(
+    asyncServerInstance = await asyncio.start_server(
         clientConnectionHandler,
-        host = serverHostAddr,
-        port = serverPortNumeric, 
-        ssl = TLScontext
-    ));
+        host=serverHostAddr,
+        port=serverPortNumeric,
+        ssl=TLScontext,
+    );
 
-    async with asyncServerInstance: 
-        await (asyncServerInstance.serve_forever()); # accept connections forever, server will die when coroutine dies
+    async with asyncServerInstance:
+        await (asyncServerInstance.serve_forever());
+
 
 async def RUN_SERVERS_CONCURRENTLY():
-    serverConfigurationList = [ # serverHostAddr, serverPortNumeric, isTLSenabled
+    serverConfigurationList = [
         ("127.0.0.1", 8080, False),
         ("::1", 8080, False),
         ("0.0.0.0", 8443, True),
@@ -460,29 +479,33 @@ async def RUN_SERVERS_CONCURRENTLY():
     ];
 
     serverTaskList = [];
-    for (hostAddr, portNumeric, TLSenabledFlag) in serverConfigurationList:
-        serverCoroutine = START_ASYNCHRONOUS_SERVER(hostAddr, portNumeric, TLSenabledFlag);
+    for hostAddr, portNumeric, TLSenabledFlag in serverConfigurationList:
+        serverCoroutine = START_ASYNCHRONOUS_SERVER(
+            hostAddr, portNumeric, TLSenabledFlag
+        );
         serverTaskList.append(asyncio.create_task(serverCoroutine));
 
-    await (asyncio.gather(*serverTaskList, return_exceptions=True));
+    await asyncio.gather(*serverTaskList, return_exceptions=True);
+
 
 def SETUP_ASYNC_SIGNAL_HANDLERS(eventLoop: asyncio.AbstractEventLoop):
     def handleAsyncInterruptSignal():
         print("\n[!SERVER]: server shutdown signal recv'd");
         for currentTask in asyncio.all_tasks(eventLoop):
             currentTask.cancel();
-    
+
     for signalNumber in (signal.SIGINT, signal.SIGTERM):
         eventLoop.add_signal_handler(signalNumber, handleAsyncInterruptSignal);
+
 
 async def MAIN_ASYNC_ENTRY_POINT():
     eventLoop = asyncio.get_running_loop();
     SETUP_ASYNC_SIGNAL_HANDLERS(eventLoop);
-    
     try:
         await RUN_SERVERS_CONCURRENTLY();
     except asyncio.CancelledError:
         print("[!SERVER]: shutting down the server");
+
 
 if __name__ == "__main__":
     try:
