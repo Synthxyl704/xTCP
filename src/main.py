@@ -1,5 +1,9 @@
+from ast import parse
 import asyncio
+from io import Writer
+from os import close
 import signal
+from ssl import VERIFY_X509_STRICT
 import time
 from constants import (
     HOST_SERVER_IPv4,
@@ -271,4 +275,166 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
                 await writer.wait_closed();
             except Exception as ASYNCIO_WRITER_ERROR:
                 print(f"[!ERR]: {ASYNCIO_WRITER_ERROR}");
+        return;
+
+    transportProtocol: str = "HTTPS" if (isTLSenabled) else "HTTP";
+    IPvX: str = "IPv6" if (isIPv6enabled) else "IPv4";
+    uniqueSessionID = SESSION_MANAGER.CREATE_NEW_SESSION(clientAddress);
+
+    try: 
+        while (True):
+            transactionStartTS: float = time.time();
+
+            try:
+                incomingDataBuffer = await asyncio.wait_for( # we wait for client stream writes
+                    reader.read(BUFFER_SIZE),
+                    timeout = 10.0
+                );
+
+                if (not incomingDataBuffer):
+                    # incomingDataBuffer = False;
+                    break; # out of scoped while only
+            except asyncio.TimeoutError as ASYNCIO_TIMEOUT_ERROR:
+                print(f"[!ERR]: {ASYNCIO_TIMEOUT_ERROR}");
+            except Exception as ASYNCTIO_INCOMING_BUFFER_ERROR:
+                print(f"[!L291-ERR]: {ASYNCTIO_INCOMING_BUFFER_ERROR}");
+
+            parsedHTTPrequest = PARSE_HTTP_REQUEST(incomingDataBuffer);
+            if (not parsedHTTPrequest): 
+                print(f"[!ERR]: something went wrong in parsing the HTTP request function");
+                break; # break out of scoped while again
+
+            userAgentStr: str = parsedHTTPrequest["headers"].get("user-agent", "");
+            browserInfo = PARSE_USER_AGENT(userAgentStr);
+            SESSION_MANAGER.UPDATE_SESSION(uniqueSessionID, userAgentStr);
+
+            connectionHeaderValue = parsedHTTPrequest["headers"].get("connection", "").lower();
+            isKeepAliveConnection= (
+                (connectionHeaderValue != "close")
+                if (parsedHTTPrequest["version"] == "HTTP/1.1")
+                else (connectionHeaderValue == "keep-alive");
+            );
+
+            if (".." in parsedHTTPrequest["path"]):
+                HTTP_STATUS_CODE: int = 404; # restrict invalid page access
+                responseBodyContent = b"<h1>ERR 404 - Invalid page access was restricted</h1>";            
+            else:
+                HTTP_STATUS_CODE: int = 200; # client request processed and recieved by the server_side
+                responseBodyContent = f"""
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>IsoAris Server</title>
+                    <style>
+                        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                        body {{
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+                            background: #404040;
+                            color: #f5f5f5;
+                            min-height: 100vh;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                        }}
+                        .container {{
+                            background: #080808;
+                            backdrop-filter: blur(10px);
+                            padding: 2rem;
+                            border-radius: 0.5px;
+                            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+                            text-align: center;
+                            max-width: 500px;
+                        }}
+                        h1 {{ font-size: 2rem; margin-bottom: 0.5rem; letter-spacing: 0.5px; }}
+                        p {{ font-size: 1.1rem; opacity: 0.9; margin-bottom: 1rem; }}
+                        .path {{
+                            background: rgba(255,255,255,0.1);
+                            padding: 0.75rem;
+                            border-radius: 6px;
+                            font-family: monospace;
+                            font-size: 0.95rem;
+                            word-break: break-all;
+                            margin-bottom: 1rem;
+                        }}
+                        footer {{ font-size: 0.85rem; opacity: 0.7; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h1>IsoAris {transportProtocol} Server</h1>
+                        <p>Request received successfully.</p>
+                        <div class="path">{parsedHTTPrequest["path"]}</div>
+                        <footer>Powered by IsoAris_xTCP</footer>
+                    </div>
+                </body>
+                </html>
+                """.encode("utf-8"); # UCS transformation format 8
+
+            compressedResponseBody, contentEncodingType = COMPRESS_RESPONSE(
+                responseBodyContent, parsedHTTPrequest["headers"].get("accept-encoding", "") # build dynamically
+            );
+
+            # (statusCode: Unknown, contentType: Unknown, contentLength: Unknown, encoding: str = "identity", connection: str = "keep-alive", isTLS: bool = False) 
+            httpResponseHeaders: bytes = BUILD_HTTP_RESPONSE(
+                HTTP_STATUS_CODE,
+                "text/html",
+                # len(responseBodyContent)
+                len(compressedResponseBody),
+                contentEncodingType, 
+                "keep-alive" if (isKeepAliveConnection) else "close",
+                isTLSenabled
+            );
+
+            writer.write(httpResponseHeaders + compressedResponseBody); # non-blocking call
+            await (writer.drain()); # hot mechanicsm that edges the non-blocking call
+
+            # "flow control" is a mechanism at L2/DLL and has to do with how much data 
+            # can be sent (speed) from transmitter to reciever
+            # the transmitter should send at a rate that the reciever can actually handle
+            # if await writer.drain() wasnt added, the memory of the (sender?) would grow and cause an OOM crash
+            # prevents OOM (out of memory) crashes/failures
+
+            TRANSACTION_LOGGER.LOG_ENTRY(
+                {
+                    "session": uniqueSessionID,
+                    "client": str(clientAddress),
+                    "method": parsedHTTPrequest["method"],
+                    "path": parsedHTTPrequest["path"],
+                    "status": HTTP_STATUS_CODE,
+                    "duration": ((time.time() - transactionStartTS) * 1000),
+                    "protocol": transportProtocol,
+                    "encoding": contentEncodingType,
+                }
+            );
+
+            if (not isKeepAliveConnection):
+                print(f"[LOG]: closed connection");
+                break;
+
+    except Exception as SOME_SERVER_ERROR:
+        print(f"[!ERR]: {SOME_SERVER_ERROR}");
+
+    finally:
+        try: 
+            writer.close();
+            await (writer.wait_closed()); 
+
+        except Exception as ASYNCIO_WRITER_ERROR:
+            print(f"[!ERR]: {ASYNCIO_WRITER_ERROR}");
+
+async def START_ASYNCHRONOUS_SERVER(
+    serverHostAddr: str,
+    serverPortNumeric: int,
+    isTLSenabled: bool = False
+):
+    isIPv6 = ":" in (serverHostAddr);
+    
+    if (isTLSenabled):
+        TLScontext = CREATE_TLS_CONTEXT();
+    else: 
+        TLScontext = None;
+
+    protocolName = "HTTPS" if (isTLSenabled) else "HTTP";
+    print(f"[x]: Serving {protocolName} on {serverHostAddr}:{serverPortNumeric}");
 
