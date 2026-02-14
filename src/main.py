@@ -3,6 +3,10 @@ import signal
 # from ssl import VERIFY_X509_STRICT
 import time
 
+from constants import (
+    BUFFER_SIZE,
+);
+
 from management import SESSION_MANAGER, TRANSACTION_LOGGER
 from protocols import (
     PARSE_USER_AGENT,
@@ -11,7 +15,7 @@ from protocols import (
     COMPRESS_RESPONSE,
     HANDLE_HTTP2_CONNECTION,
     CREATE_TLS_CONTEXT,
-)
+);
 
 # import threading;
 # import selectors;
