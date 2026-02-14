@@ -1,10 +1,10 @@
-import socket;
-import gzip;
-import mimetypes;
-import ssl;
-import time;
-import struct;
-import os;
+import socket
+import gzip
+import mimetypes
+import ssl
+import time
+import struct
+import os
 
 from typing import Optional, Dict, Union, List, Tuple;
 from email.utils import formatdate;
@@ -33,15 +33,12 @@ from management import SESSION_MANAGER, TRANSACTION_LOGGER;
 
 ### --- DNS --- ###
 
-
 def DNS_LOOKUP(domainName: str) -> Union[str, None]:
     DNS_database = {
         "localhost": "127.0.0.1",
         "localhost6": "::1",
     };
-
     return DNS_database.get(domainName.lower());
-
 
 ### --- USER AGENT PARSING --- ###
 
@@ -58,7 +55,6 @@ OS_Database = [
     ("Android", ["android"]),
     ("iOS", ["iphone", "ipad"]),
 ];
-
 
 def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]:
     info = {
@@ -85,17 +81,13 @@ def PARSE_USER_AGENT(userAgent: str) -> Dict[str, str]:
             break;
     return info;
 
-
 ### --- MIME TYPES --- ###
-
 
 def getMIMEtype(filePath: str):
     mimeType, _ = mimetypes.guess_type(filePath);
     return mimeType or "application/octet-stream";
 
-
 ### --- COMPRESSION --- ###
-
 
 def COMPRESS_RESPONSE(data: bytes, encodeType: str) -> tuple[bytes, str]:
     if "gzip" in encodeType:
@@ -107,9 +99,7 @@ def COMPRESS_RESPONSE(data: bytes, encodeType: str) -> tuple[bytes, str]:
             pass;
     return data, "identity";
 
-
 ### --- HTTP/1.1 --- ###
-
 
 def PARSE_HTTP_REQUEST(requestBytes: bytes):
     parts = requestBytes.split(b"\r\n\r\n", 1);
@@ -137,7 +127,6 @@ def PARSE_HTTP_REQUEST(requestBytes: bytes):
         "body": bodyPart,
     };
 
-
 def BUILD_HTTP_RESPONSE(
     statusCode,
     contentType,
@@ -163,7 +152,6 @@ def BUILD_HTTP_RESPONSE(
         headers.append(f"Content-Encoding: {encoding}");
 
     return ("\r\n".join(headers) + "\r\n\r\n").encode("utf-8");
-
 
 ### --- HPACK (HTTP/2 Header Compression) --- ###
 
@@ -231,7 +219,6 @@ HPACK_STATIC_TABLE: List[Tuple[str, str]] = [
     ("www-authenticate", ""),
 ];
 
-
 def HPACK_DECODE_INTEGER(
     byteArrayData: bytes, currentPosition: int, prefixBits: int
 ) -> Tuple[int, int]:
@@ -248,11 +235,9 @@ def HPACK_DECODE_INTEGER(
         value += (b & 0x7F) << shift;
         if (b & 0x80) == 0:
             break;
-
         shift += 7;
 
     return (value, currentPosition);
-
 
 def HPACK_ENCODE_INTEGER(value: int, prefixBits: int, prefixMask: int = 0) -> bytes:
     maxPrefix = (1 << prefixBits) - 1;
@@ -268,7 +253,6 @@ def HPACK_ENCODE_INTEGER(value: int, prefixBits: int, prefixMask: int = 0) -> by
     output.append(value);
     return bytes(output);
 
-
 def HPACK_DECODE_STRING(data: bytes, pos: int) -> Tuple[str, int]:
     if pos >= len(data):
         return "", pos;
@@ -282,11 +266,9 @@ def HPACK_DECODE_STRING(data: bytes, pos: int) -> Tuple[str, int]:
 
     return raw.decode("utf-8", errors="ignore"), pos;
 
-
 def HPACK_ENCODE_STRING(value: str) -> bytes:
     raw = value.encode("utf-8");
     return HPACK_ENCODE_INTEGER(len(raw), 7, 0) + raw;
-
 
 def HPACK_GET_STATIC_HEADER(index: int) -> Tuple[str, str]:
     if index <= 0 or index > len(HPACK_STATIC_TABLE):
@@ -294,10 +276,7 @@ def HPACK_GET_STATIC_HEADER(index: int) -> Tuple[str, str]:
 
     return HPACK_STATIC_TABLE[index - 1];
 
-
-def HPACK_FIND_STATIC_INDEX(
-    name: str, optionalValue: str = None
-) -> Union[None, int]:
+def HPACK_FIND_STATIC_INDEX(name: str, optionalValue: str = None) -> Union[None, int]:
     for idx, item in enumerate(HPACK_STATIC_TABLE, start=1):
         if optionalValue is None:
             if item[0] == name:
@@ -307,7 +286,6 @@ def HPACK_FIND_STATIC_INDEX(
                 return idx;
 
     return 0;
-
 
 def HPACK_DECODE_HEADER_BLOCK(binaryData: bytes) -> Dict[str, str]:
     headers: Dict[str, str] = {};
@@ -319,7 +297,6 @@ def HPACK_DECODE_HEADER_BLOCK(binaryData: bytes) -> Dict[str, str]:
             name, value = HPACK_GET_STATIC_HEADER(index);
             if name:
                 headers[name] = value;
-
             continue;
 
         if (b & 0x40) or (b & 0x10) or (b & 0x00) == 0:
@@ -338,7 +315,6 @@ def HPACK_DECODE_HEADER_BLOCK(binaryData: bytes) -> Dict[str, str]:
             continue;
         break;
     return headers;
-
 
 def HPACK_ENCODE_RESPONSE_HEADERS(headers: Dict[str, str]) -> bytes:
     output = bytearray();
@@ -361,9 +337,7 @@ def HPACK_ENCODE_RESPONSE_HEADERS(headers: Dict[str, str]) -> bytes:
 
     return bytes(output);
 
-
 ### --- HTTP/2 FRAME HANDLING --- ###
-
 
 def BUILD_HTTP2_FRAME(
     frameType: int, flags: int, streamId: int, payload: bytes = b""
@@ -380,7 +354,6 @@ def BUILD_HTTP2_FRAME(
     ) + struct.pack("!I", streamId & 0x7FFFFFFF);
     return header + payload;
 
-
 def RECV_EXACT(connection: socket.socket, size: int) -> bytes:
     out = bytearray();
     while len(out) < size:
@@ -389,7 +362,6 @@ def RECV_EXACT(connection: socket.socket, size: int) -> bytes:
             return b"";
         out.extend(chunk);
     return bytes(out);
-
 
 def READ_HTTP2_FRAME(
     connection: socket.socket,
@@ -408,7 +380,6 @@ def READ_HTTP2_FRAME(
 
     return frameType, flags, streamId, payload;
 
-
 def BUILD_HTTP2_SETTINGS(
     maxConcurrentStreams: int = 128, initialWindow: int = 65535
 ) -> bytes:
@@ -418,9 +389,7 @@ def BUILD_HTTP2_SETTINGS(
     payload += struct.pack("!HI", HTTP2_SETTINGS_INITIAL_WINDOW_SIZE, initialWindow);
     return BUILD_HTTP2_FRAME(HTTP2_FRAME_SETTINGS, 0x0, 0, payload);
 
-
 ### --- HTTP/2 CONNECTION HANDLER --- ###
-
 
 def HANDLE_HTTP2_CONNECTION(
     connection: socket.socket, clientAddress, isTLS=False, isIPv6=False
@@ -558,7 +527,6 @@ def HANDLE_HTTP2_CONNECTION(
                 HTTP2_FRAME_DATA, HTTP2_FLAG_END_STREAM, streamId, compressedBody
             )
         );
-
         TRANSACTION_LOGGER.LOG_ENTRY(
             {
                 "session": sessionID,
@@ -575,9 +543,7 @@ def HANDLE_HTTP2_CONNECTION(
         if serverSettingsAcked is False:
             continue;
 
-
 ### --- TLS/SSL CONTEXT --- ###
-
 
 def CREATE_TLS_CONTEXT() -> Union[ssl.SSLContext, None]:
     if not os.path.exists(CERTIFICATION_FILE):
@@ -585,12 +551,15 @@ def CREATE_TLS_CONTEXT() -> Union[ssl.SSLContext, None]:
 
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);
-        context.load_cert_chain(
-            certfile=CERTIFICATION_FILE, keyfile=KEY_FILE
-        );
+        context.load_cert_chain(certfile=CERTIFICATION_FILE, keyfile=KEY_FILE);
         context.check_hostname = False;
         context.minimum_version = ssl.TLSVersion.TLSv1_2;
-        context.set_alpn_protocols(["h2", "http/1.1"]);
+        # The HTTP/2 handler uses blocking socket I/O which is incompatible with asyncio
+        # context.set_alpn_protocols(["h2", "http/1.1"]);  
+        # DISABLED - HTTP/2 not async-safe
+        context.set_alpn_protocols(
+            ["http/1.1"]
+        );  # HTTP/1.1 only for stable async operation
         return context;
     except Exception as TLS_CONTEXT_CREATION_ERROR:
         print(f"[!TLS_FAIL]: {TLS_CONTEXT_CREATION_ERROR}");
