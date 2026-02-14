@@ -1,7 +1,7 @@
 from ast import parse
 import asyncio
 from io import Writer
-from os import close
+from os import WCOREDUMP, close
 import signal
 from ssl import VERIFY_X509_STRICT
 import time
@@ -258,12 +258,12 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
     writer: asyncio.StreamWriter,
     isTLSenabled: bool = False,
     isIPv6enabled: bool = False,
-    applcationLayerProtocol: str = "http/1.1" # default settings
+    applicationLayerProtocol: str = "http/1.1" # default settings
 ):
     clientAddress = writer.get_extra_info("peername");
 
     # if protocol is HTTP/2 we switch it to that instead of defaulting to HTTP/1.1
-    if applcationLayerProtocol == "h2":
+    if (applicationLayerProtocol == "h2"):
         try:
             HANDLE_HTTP2_CONNECTION(writer.get_extra_info("socket"), clientAddress, isTLSenabled, isIPv6enabled);
         except Exception as HTTP2_SERVER_ERROR:
@@ -438,3 +438,60 @@ async def START_ASYNCHRONOUS_SERVER(
     protocolName = "HTTPS" if (isTLSenabled) else "HTTP";
     print(f"[x]: Serving {protocolName} on {serverHostAddr}:{serverPortNumeric}");
 
+    async def clientConnectionHandler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        await HANDLE_ASYNC_CLIENT_CONNECTION(
+            reader,
+            writer,
+            isTLSenabled,
+            isIPv6,
+            "http/1.1"
+        );
+
+    asyncServerInstance = (await asyncio.start_server(
+        clientConnectionHandler,
+        host = serverHostAddr,
+        port = serverPortNumeric, 
+        xSSL = TLScontext
+    ));
+
+    async with asyncServerInstance: 
+        await (asyncServerInstance.serve_forever()); # accept connections forever, server will die when coroutine dies
+
+async def RUN_SERVERS_CONCURRENTLY():
+    serverConfigurationList = [ # serverHostAddr, serverPortNumeric, isTLSenabled
+        ("127.0.0.1", 8080, False),
+        ("::1", 8080, False),
+        ("0.0.0.0", 8443, True),
+        ("::1", 8443, True),
+    ];
+
+    serverTaskList = [];
+    for (hostAddr, portNumeric, TLSenabledFlag) in serverConfigurationList:
+        serverCoroutine = START_ASYNCHRONOUS_SERVER(hostAddr, portNumeric, TLSenabledFlag);
+        serverTaskList.append(asyncio.create_task(serverCoroutine));
+
+    await (asyncio.gather(*serverTaskList, return_exceptions=True));
+
+def SETUP_ASYNC_SIGNAL_HANDLERS(eventLoop: asyncio.AbstractEventLoop):
+    def handleAsyncInterruptSignal():
+        print("\n[!SERVER]: server shutdown signal recv'd");
+        for currentTask in asyncio.all_tasks(eventLoop):
+            currentTask.cancel();
+    
+    for signalNumber in (signal.SIGINT, signal.SIGTERM):
+        eventLoop.add_signal_handler(signalNumber, handleAsyncInterruptSignal);
+
+async def MAIN_ASYNC_ENTRY_POINT():
+    eventLoop = asyncio.get_running_loop();
+    SETUP_ASYNC_SIGNAL_HANDLERS(eventLoop);
+    
+    try:
+        await RUN_SERVERS_CONCURRENTLY();
+    except asyncio.CancelledError:
+        print("[!SERVER]: shutting down the server");
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(MAIN_ASYNC_ENTRY_POINT());
+    except KeyboardInterrupt:
+        print("\n[???]: what was that? eh, continuing anyways");
