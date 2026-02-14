@@ -1,18 +1,8 @@
-from ast import parse
 import asyncio
-from io import Writer
-from os import WCOREDUMP, close
 import signal
-from ssl import VERIFY_X509_STRICT
+# from ssl import VERIFY_X509_STRICT
 import time
-from constants import (
-    HOST_SERVER_IPv4,
-    HOST_SERVER_IPv6,
-    PORT,
-    TLS_PORT,
-    BUFFER_SIZE,
-    serverRunningStatus,
-)
+
 from management import SESSION_MANAGER, TRANSACTION_LOGGER
 from protocols import (
     PARSE_USER_AGENT,
