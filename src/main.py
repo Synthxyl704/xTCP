@@ -1,23 +1,3 @@
-"""
-=== TLS/HTTP2 PROTOCOL VIOLATION FIXES ===
-
-OPTION A: ALPN Protocol Detection (main.py:443-452)
-- Fixed hardcoded "http/1.1" protocol in clientConnectionHandler
-- Now retrieves negotiated ALPN protocol from SSL object
-- Falls back to http/1.1 if ALPN negotiation fails
-- This prevents the "network protocol violation" error where Firefox
-  negotiates HTTP/2 but server treated it as HTTP/1.1
-
-OPTION B: HTTP/2 Disable in ALPN (protocols.py:587-592)
-- Disabled HTTP/2 ("h2") advertisement in TLS ALPN protocols
-- The HTTP/2 handler (HANDLE_HTTP2_CONNECTION) uses blocking socket I/O
-- This is incompatible with asyncio's async/await model
-- HTTP/2 handler extracts raw socket which bypasses SSL decryption
-- Re-enable HTTP/2 only after implementing async-compatible HTTP/2 handler
-
-Both options combined provide stable HTTPS operation on port 8443.
-"""
-
 import asyncio
 import signal
 
