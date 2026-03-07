@@ -401,7 +401,7 @@ def RECV_EXACT(connection: socket.socket, size: int) -> bytes:
 
         out.extend(chunk);
 
-    return bytes(out)
+    return bytes(out);
 
 
 def READ_HTTP2_FRAME(connection: socket.socket) -> Optional[Tuple[int, int, int, bytes]]:
@@ -454,6 +454,7 @@ def HANDLE_HTTP2_CONNECTION(connection: socket.socket, clientAddress, isTLS=Fals
 
         frameType, flags, streamId, payload = frame;
 
+        
         if frameType == HTTP2_FRAME_SETTINGS:
             if flags & HTTP2_FLAG_ACK:
                 serverSettingsAcked = True;
@@ -863,8 +864,7 @@ class IP_PACKET_HEADER:
             # same way we're just glueing it here, if we did "+" literally we might as well 
             # get carries which we dont want 
             return (
-                (int(parts[0]) << 24) | (int(parts[1]) << 16)
-                | (int(parts[2]) << 8) | int(parts[3])
+                (int(parts[0]) << 24) | (int(parts[1]) << 16)| (int(parts[2]) << 8) | int(parts[3])
             );
 
         header: bytes = struct.pack(
@@ -936,13 +936,17 @@ class IP_PACKET_HEADER:
 
 
 def CALCULATE_CHECKSUM(data: bytes) -> int: 
+    # IPv4 header checksum
     # data: byte = [0x12, 0x34, 0x56]
     # padded -> [0x12, 0x34, 0x56, 0x00]
+    # every 2 bytes = 1 word
+
+    # if the length is odd, it pads one zero byte at the end so the length becomes even
     if len(data) % 2 == 1:
-        data += b"\x00";
+        data += b"\x00"; 
 
     checksum: int = 0;
-    for index in range(0, len(data), 2): # range(start @, stop b4, step);
+    for index in range(0, len(data), 2): # range(start @, stop b4, step);, we go 2 bytes per step!
         # suppose we have 0x67 and 0x69
         # we need to concatenate them but without actually concatenating them
         # (0x67 << 8) + 0x69 (leftshift hexadecimal by binary and return hexadecimal again)
@@ -951,6 +955,9 @@ def CALCULATE_CHECKSUM(data: bytes) -> int:
         word: int = (data[index] << 8) + data[index + 1];
         checksum += word; # add every word into its int from to form the checksum 
 
+    # i forgot what this shit did 
+
+    # ones complement addition
     # carry = checksum >> 16 
     # resultLower = checksum & 0xFFFF 
     # checksum = resultLower + carry 
@@ -961,7 +968,7 @@ def CALCULATE_CHECKSUM(data: bytes) -> int:
     return (~checksum & 0xFFFF); # 16 bit checksum integer
 
 
-def CALCULATE_TCP_CHECKSUM(sourceIP: str, destinationIP: str, tcpHeaderAndData: bytes) -> int:
+def CALCULATE_TCP_CHECKSUM(sourceIP: str, destinationIP: str, TCP_headerAndData: bytes) -> int:
     """
     Pseudo-header format:
     +--------+--------+--------+--------+
@@ -982,10 +989,10 @@ def CALCULATE_TCP_CHECKSUM(sourceIP: str, destinationIP: str, tcpHeaderAndData: 
         + ipToBytes(destinationIP)
         + b"\x00"
         + bytes([6])  # TCP protocol
-        + struct.pack("!H", len(tcpHeaderAndData))
+        + struct.pack("!H", len(TCP_headerAndData))
     );
     
-    return CALCULATE_CHECKSUM(pseudoHeader + tcpHeaderAndData);
+    return CALCULATE_CHECKSUM(pseudoHeader + TCP_headerAndData);
 
 
 @dataclass
@@ -1164,15 +1171,22 @@ class TCP_CONNECTION_CONTROL_BLOCK:
 
 class CUSTOM_TCP_STACK:
     def __init__(self):
-        # ACTIVE_CONNECTIONS
-        # LISTENING_SOCKETS
-        # PENDING_CONNECTIONS
+        # current active connections indexed by (local_addr, remote_addr) tuple 
 
-        # current active connections indexed by (local_addr, remote_addr) tuple
-        self.connections: Dict[Tuple[Tuple[str, int], Tuple[str, int]], TCP_CONNECTION_CONTROL_BLOCK] = {}; # holy fuck?
-        self.listenSockets: Dict[Tuple[str, int], socket.socket] = {};
-        self.pendingConnections: Dict[Tuple[str, int], List[TCP_CONNECTION_CONTROL_BLOCK]] = {}; # unconfirmed/3-way in progress
+        # a dictionary containing a tuple of 2 tuples containing IP + port and TCP connection class/block for storing their state 
+        # a dictionary containing a tuple of str (IP), int (PORT), and the socket class from the module
+        # a dictionary containing tuple of IP + PORT and a list of TCP connections 
 
+        # btw these square brackets are called "generic type parameters"
+
+        self.connections: Dict[Tuple[Tuple[str, int], Tuple[str, int]], TCP_CONNECTION_CONTROL_BLOCK] = {}; # active connections 
+        self.listenSockets: Dict[Tuple[str, int], socket.socket] = {}; # listening endpoint sockets
+        self.pendingConnections: Dict[Tuple[str, int], List[TCP_CONNECTION_CONTROL_BLOCK]] = {}; # (pending) 
+                                                                                                 # unconfirmed/3-way in progress
+
+
+    # connex A: (("10.0.0.1", 50000), ("192.168.1.1", 80))
+    # connex B: (("10.0.0.1", 50001), ("192.168.1.1", 80))  -< different local port, different connection key!
     def createConnection(self, localAddress: Tuple[str, int], remoteAddress: Tuple[str, int]) -> TCP_CONNECTION_CONTROL_BLOCK:
         connectionKey: Tuple[Tuple[str, int], Tuple[str, int]] = (
             localAddress,
@@ -1184,7 +1198,7 @@ class CUSTOM_TCP_STACK:
         );
 
         self.connections[connectionKey] = newConnectionTCB;
-        return newConnectionTCB;
+        return newConnectionTCB; 
 
     def getConnection(
         self, localAddress: Tuple[str, int], remoteAddress: Tuple[str, int]
@@ -1206,112 +1220,122 @@ class CUSTOM_TCP_STACK:
 
         if connectionKey in self.connections:
             del self.connections[connectionKey];
+    # !TODO - refactor these ^^^ redundancies later 
 
-    def processIncomingSegment(
-        self,
-        ipHeader: IP_PACKET_HEADER,
-        tcpHeader: TCP_SEGMENT_HEADER,
+    def processIncomingSegment(self, 
+        ipHeader: IP_PACKET_HEADER, TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-
         localAddress: Tuple[str, int] = (
             ipHeader.destinationIP,
-            tcpHeader.destinationPort,
+            TCP_header.destinationPort,
         );
 
-        remoteAddress: Tuple[str, int] = (ipHeader.sourceIP, tcpHeader.sourcePort);
+        remoteAddress: Tuple[str, int] = (ipHeader.sourceIP, TCP_header.sourcePort);
     
-        receivedChecksum: int = tcpHeader.checksum;
-        tcpHeader.checksum = 0;
+        receivedChecksum: int = TCP_header.checksum;
+        TCP_header.checksum = 0;
         calculatedChecksum: int = CALCULATE_TCP_CHECKSUM(
             ipHeader.sourceIP,
             ipHeader.destinationIP,
-            tcpHeader.serialize() + payloadData,
+            TCP_header.serialize() + payloadData,
         );
 
         if receivedChecksum != calculatedChecksum:
             print(f"[TCP]: Checksum mismatch, dropping segment");
             return None;
 
-        tcpHeader.checksum = receivedChecksum;
+        TCP_header.checksum = receivedChecksum;
         connectionTCB: Optional[TCP_CONNECTION_CONTROL_BLOCK] = self.getConnection(
             localAddress, remoteAddress
         );
 
-        if (
-            connectionTCB is None
-            and tcpHeader.has_flag(TCP_FLAGS.SYN)
-            and not tcpHeader.has_flag(TCP_FLAGS.ACK)
-        ):
+        if (connectionTCB is None and TCP_header.has_flag(TCP_FLAGS.SYN) and not tcpHeader.has_flag(TCP_FLAGS.ACK)):
             if localAddress in self.listenSockets:
                 
                 # we create new connection in SYN_RECEIVED state
                 connectionTCB = self.createConnection(localAddress, remoteAddress);
                 connectionTCB.updateState(TCP_STATE.SYN_RECEIVED); # this is starting to hurt my brain kind of
-                connectionTCB.initialReceiveSequenceNumber = tcpHeader.sequenceNumber;
-                connectionTCB.receiveSequenceNumber = tcpHeader.sequenceNumber + 1;
+                connectionTCB.initialReceiveSequenceNumber = TCP_header.sequenceNumber;
+                connectionTCB.receiveSequenceNumber = TCP_header.sequenceNumber + 1;
                 
                 # parse options for MSS
-                self.parseTCPOptions(connectionTCB, tcpHeader.options);
+                self.parseTCPOptions(connectionTCB, TCP_header.options);
                 # send SYN-ACK
                 return self.buildSYNACKSegment(connectionTCB);
             else:
                 # no listener - send RST
-                return self.buildRSTSegment(localAddress, remoteAddress, tcpHeader.sequenceNumber);
+                return self.buildRSTSegment(localAddress, remoteAddress, TCP_header.sequenceNumber);
 
         if connectionTCB is None:
             # connection doesn't exist - send RST
-            return self.buildRSTSegment(localAddress, remoteAddress, tcpHeader.sequenceNumber);
+            return self.buildRSTSegment(localAddress, remoteAddress, TCP_header.sequenceNumber);
 
         if connectionTCB.currentState == TCP_STATE.SYN_RECEIVED:
-            return self.handleSYN_RECEIVED(connectionTCB, tcpHeader, payloadData);
+            return self.handleSYN_RECEIVED(connectionTCB, TCP_header, payloadData);
         elif connectionTCB.currentState == TCP_STATE.ESTABLISHED:
-            return self.handleESTABLISHED(connectionTCB, tcpHeader, payloadData);
+            return self.handleESTABLISHED(connectionTCB, TCP_header, payloadData);
         elif connectionTCB.currentState == TCP_STATE.FIN_WAIT_1:
-            return self.handleFIN_WAIT_1(connectionTCB, tcpHeader, payloadData);
+            return self.handleFIN_WAIT_1(connectionTCB, TCP_header, payloadData);
         elif connectionTCB.currentState == TCP_STATE.FIN_WAIT_2:
-            return self.handleFIN_WAIT_2(connectionTCB, tcpHeader, payloadData);
+            return self.handleFIN_WAIT_2(connectionTCB, TCP_header, payloadData);
         elif connectionTCB.currentState == TCP_STATE.CLOSE_WAIT:
-            return self.handleCLOSE_WAIT(connectionTCB, tcpHeader, payloadData);
+            return self.handleCLOSE_WAIT(connectionTCB, TCP_header, payloadData);
         elif connectionTCB.currentState == TCP_STATE.CLOSING:
-            return self.handleCLOSING(connectionTCB, tcpHeader, payloadData);
+            return self.handleCLOSING(connectionTCB, TCP_header, payloadData);
         elif connectionTCB.currentState == TCP_STATE.LAST_ACK:
-            return self.handleLAST_ACK(connectionTCB, tcpHeader, payloadData);
+            return self.handleLAST_ACK(connectionTCB, TCP_header, payloadData);
         elif connectionTCB.currentState == TCP_STATE.TIME_WAIT:
-            return self.handleTIME_WAIT(connectionTCB, tcpHeader, payloadData);
+            return self.handleTIME_WAIT(connectionTCB, TCP_header, payloadData);
 
         return None;
 
     def parseTCPOptions(self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK, options: bytes) -> None:
+        # parse TCP optionals from variable length options field in TCP headers
+
+        # each TCP option section has 3 parts 
+        # - kind (what option it is)
+        # - length (total options length)
+        # - value (actual data)
+
+
+        # options: bytes  # raw bytes from the TCP header 
+        # bytes = b'\x02\x04\x05\xb4\x01\x01\x00'
+        # optionKind: int = options[optionIndex];  # returns integer 0-255
+        # print(options[0]) returns "2" type integer
         optionIndex: int = 0;
         while optionIndex < len(options):
-            optionKind: int = options[optionIndex];
+            optionKind: int = options[optionIndex]; # this returns an integer
             
-            if optionKind == 0:  # End of options
+            if optionKind == 0:  # 0 = null terminator (NUL) - end of options, no options to parse
                 break;
             
-            elif optionKind == 1:  # NOP
+            elif optionKind == 1: # = start of heading (SOH)
                 optionIndex += 1;
                 continue;
             
             elif optionKind == 2:  # MSS option
-                if optionIndex + 3 < len(options):
-                    mssValue: int = struct.unpack(
-                        "!H", options[optionIndex + 2 : optionIndex + 4]
+                if ((optionIndex + 3) < len(options)): # (kind + len + value) = 4 bytes 
+                    maximumSegmentSize: int = struct.unpack(
+                        "!H", options[optionIndex + 2 : optionIndex + 4] 
+                        # slice bytes 2-3 (0-indexed: +2 to +4) 
+                        # for 16-bit MSS value extraction
                     )[0];
 
-                    connectionTCB.maxSegmentSizeReceive = min(mssValue, connectionTCB.MAXIMUM_MSS);
+                    connectionTCB.maxSegmentSizeReceive = min(maximumSegmentSize, connectionTCB.MAXIMUM_MSS);
+                
                 optionIndex += 4;
             
-            elif optionKind == 3: 
-                if optionIndex + 2 < len(options):
-                    connectionTCB.receiveWindowScale = options[optionIndex + 2];
+            # RFC 7323/1323
+            elif optionKind == 3: # kind(1) + len(1) + shiftval(1) = 3 bytes
+                if optionIndex + 2 < len(options): # window scaling option, i do not know much about this
+                    connectionTCB.receiveWindowScale = options[optionIndex + 2]; 
                     connectionTCB.sendWindowScale = options[optionIndex + 2];
                 
                 optionIndex += 3;
             
-            elif optionKind == 8:
-                connectionTCB.timestampEnabled = True;
+            elif optionKind == 8: # timestamps
+                connectionTCB.timestampEnabled = True; # no idea again...
                 optionIndex += 10;
             
             else:
@@ -1320,45 +1344,46 @@ class CUSTOM_TCP_STACK:
                 else:
                     optionIndex += 1;
 
-    def buildSYNACKSegment(
-        self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK
-    ) -> Tuple[TCP_SEGMENT_HEADER, bytes]:
-        """Build SYN-ACK segment for three-way handshake"""
+    def buildSYNACKSegment(self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK) -> Tuple[TCP_SEGMENT_HEADER, bytes]:
+        # building SYN-ACK seg fo 3-way 
+        
         options: bytes = (
             bytes([2, 4])
             + struct.pack("!H", connectionTCB.maxSegmentSizeReceive)  # MSS
             + bytes([1, 1, 1])  # NOP padding
-            + bytes([3, 3, connectionTCB.sendWindowScale])  # Window scale
-        )
+            + bytes([3, 3, connectionTCB.sendWindowScale])  # window scale
+        );
+
         synAckHeader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
-            sourcePort=connectionTCB.localAddress[1],
-            destinationPort=connectionTCB.remoteAddress[1],
-            sequenceNumber=connectionTCB.initialSendSequenceNumber,
-            acknowledgmentNumber=connectionTCB.receiveSequenceNumber,
-            dataOffset=0,
-            flags=TCP_FLAGS.SYN | TCP_FLAGS.ACK,
-            windowSize=min(connectionTCB.receiveWindow, 0xFFFF),
-            checksum=0,
-            urgentPointer=0,
-            options=options,
-        )
-        # Calculate checksum
-        serializedHeader: bytes = synAckHeader.serialize()
-        synAckHeader.checksum = CALCULATE_TCP_CHECKSUM(
+            sourcePort = connectionTCB.localAddress[1],
+            destinationPort = connectionTCB.remoteAddress[1],
+            sequenceNumber = connectionTCB.initialSendSequenceNumber,
+            acknowledgmentNumber = connectionTCB.receiveSequenceNumber,
+            dataOffset = 0,
+            flags = TCP_FLAGS.SYN | TCP_FLAGS.ACK,
+            windowSize = min(connectionTCB.receiveWindow, 0xFFFF),
+            checksum = 0,
+            urgentPointer = 0,
+            options = options,
+        );
+
+        # serialize and calculate checksum
+        serializedHeader: bytes = synAckHeader.serialize();
+        synAckHeader.checksum = CALCULATE_TCP_CHECKSUM( # type annotation not supported for this expression
             connectionTCB.localAddress[0],
             connectionTCB.remoteAddress[0],
             serializedHeader,
-        )
-        return synAckHeader, b""
+        );
 
-    def buildRSTSegment(
-        self,
+        return synAckHeader, b"";
+
+    def buildRSTSegment(self,
         localAddress: Tuple[str, int],
-        remoteAddress: Tuple[str, int],
-        acknowledgmentNumber: int,
+        remoteAddress: Tuple[str, int], acknowledgmentNumber: int,
     ) -> Tuple[TCP_SEGMENT_HEADER, bytes]:
-        """Build RST segment to reset connection"""
-        rstHeader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
+
+        # RESET / RST header for instant termination and not the standard way
+        RST_header: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
             sourcePort=localAddress[1],
             destinationPort=remoteAddress[1],
             sequenceNumber=0,
@@ -1368,85 +1393,81 @@ class CUSTOM_TCP_STACK:
             windowSize=0,
             checksum=0,
             urgentPointer=0,
-        )
-        serializedHeader: bytes = rstHeader.serialize()
-        rstHeader.checksum = CALCULATE_TCP_CHECKSUM(
-            localAddress[0], remoteAddress[0], serializedHeader
-        )
-        return rstHeader, b""
+        );
 
-    def handleSYN_RECEIVED(
-        self,
+        serializedHeader: bytes = RST_header.serialize();
+        RST_header.checksum = CALCULATE_TCP_CHECKSUM(localAddress[0], remoteAddress[0], serializedHeader);
+        return (RST_header, b"");
+
+    def handleSYN_RECEIVED(self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """Handle segment in SYN_RECEIVED state (completing three-way handshake)"""
-        if tcpHeader.has_flag(TCP_FLAGS.ACK):
-            if (
-                tcpHeader.acknowledgmentNumber
-                == connectionTCB.initialSendSequenceNumber + 1
-            ):
-                # Three-way handshake complete
-                connectionTCB.sendUnacknowledged = tcpHeader.acknowledgmentNumber
-                connectionTCB.sendSequenceNumber = tcpHeader.acknowledgmentNumber
-                connectionTCB.updateState(TCP_STATE.ESTABLISHED)
-                connectionTCB.sendWindow = (
-                    tcpHeader.windowSize << connectionTCB.sendWindowScale
-                )
-                print(
-                    f"[TCP]: Connection established {connectionTCB.localAddress} <-> {connectionTCB.remoteAddress}"
-                )
-                return None
+        
+        # handle segment in SYN_RECEIVED state (completing three-way handshake)
+
+        if TCP_header.has_flag(TCP_FLAGS.ACK):
+            if (TCP_header.acknowledgmentNumber == connectionTCB.initialSendSequenceNumber + 1):
+                
+                # three-way handshake complete
+                connectionTCB.sendUnacknowledged = TCP_header.acknowledgmentNumber;
+
+                # acknowledgmentNumber: int = struct.unpack("!I", data[8:12])[0];
+                connectionTCB.sendSequenceNumber = TCP_header.acknowledgmentNumber;
+                
+                connectionTCB.updateState(TCP_STATE.ESTABLISHED); # handy 
+                
+                connectionTCB.sendWindow = (TCP_header.windowSize << connectionTCB.sendWindowScale);
+                
+                print(f"[TCP]: Connection established {connectionTCB.localAddress} <-> {connectionTCB.remoteAddress}");
+                return None;
+            
             else:
-                # Bad ACK - send RST
+                # if incorrect/bad ACK signal/flag - send RST segment
+                # because the ACK is bad, we reset the connection by transmitting an RST segment back
                 return self.buildRSTSegment(
                     connectionTCB.localAddress,
                     connectionTCB.remoteAddress,
-                    tcpHeader.sequenceNumber,
-                )
+                    TCP_header.sequenceNumber,
+                );
 
-        return None
+        return None;
 
-    def handleESTABLISHED(
-        self,
+    def handleESTABLISHED(self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """Handle segment in ESTABLISHED state"""
-        # Update window
-        connectionTCB.sendWindow = tcpHeader.windowSize << connectionTCB.sendWindowScale
-        # Process ACK
-        if tcpHeader.has_flag(TCP_FLAGS.ACK):
-            self.processAcknowledgment(connectionTCB, tcpHeader.acknowledgmentNumber)
+        # handle segment in ESTABLISHED state now
+        
+        # update window
+        connectionTCB.sendWindow = TCP_header.windowSize << connectionTCB.sendWindowScale;
+        
+        # process ACK
+        if TCP_header.has_flag(TCP_FLAGS.ACK):
+            self.processAcknowledgment(connectionTCB, TCP_header.acknowledgmentNumber);
 
-        # Check for incoming data
         if payloadData:
-            if tcpHeader.sequenceNumber == connectionTCB.receiveSequenceNumber:
-                # In-order data
-                connectionTCB.receiveBuffer.extend(payloadData)
-                connectionTCB.receiveSequenceNumber += len(payloadData)
-                # Check for out-of-order segments that can now be processed
-                while (
-                    connectionTCB.receiveSequenceNumber
-                    in connectionTCB.outOfOrderSegments
-                ):
-                    segmentData: bytes = connectionTCB.outOfOrderSegments.pop(
-                        connectionTCB.receiveSequenceNumber
-                    )
-                    connectionTCB.receiveBuffer.extend(segmentData)
-                    connectionTCB.receiveSequenceNumber += len(segmentData)
+            if TCP_header.sequenceNumber == connectionTCB.receiveSequenceNumber:
+                connectionTCB.receiveBuffer.extend(payloadData);
+                connectionTCB.receiveSequenceNumber += len(payloadData);
+                while (connectionTCB.receiveSequenceNumber in connectionTCB.outOfOrderSegments):
+                    segmentData: bytes = connectionTCB.outOfOrderSegments.pop(connectionTCB.receiveSequenceNumber);
+
+                    connectionTCB.receiveBuffer.extend(segmentData);
+                    connectionTCB.receiveSequenceNumber += len(segmentData);
+            
             else:
                 # Out-of-order segment - buffer it
-                connectionTCB.outOfOrderSegments[tcpHeader.sequenceNumber] = payloadData
+                connectionTCB.outOfOrderSegments[TCP_header.sequenceNumber] = payloadData;
 
-        # Check for FIN
-        if tcpHeader.has_flag(TCP_FLAGS.FIN):
-            connectionTCB.receiveSequenceNumber += 1
-            connectionTCB.updateState(TCP_STATE.CLOSE_WAIT)
-            # Send ACK for FIN
-            ackHeader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
+        if TCP_header.has_flag(TCP_FLAGS.FIN):
+            connectionTCB.receiveSequenceNumber += 1;
+            connectionTCB.updateState(TCP_STATE.CLOSE_WAIT);
+
+            # send ACK for FIN
+            ACK_header: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
                 sourcePort=connectionTCB.localAddress[1],
                 destinationPort=connectionTCB.remoteAddress[1],
                 sequenceNumber=connectionTCB.sendSequenceNumber,
@@ -1456,70 +1477,64 @@ class CUSTOM_TCP_STACK:
                 windowSize=min(connectionTCB.receiveWindow, 0xFFFF),
                 checksum=0,
                 urgentPointer=0,
-            )
-            serializedHeader: bytes = ackHeader.serialize()
-            ackHeader.checksum = CALCULATE_TCP_CHECKSUM(
+            );
+
+            serializedHeader: bytes = ACK_header.serialize(); 
+            ACK_header.checksum = CALCULATE_TCP_CHECKSUM(
                 connectionTCB.localAddress[0],
                 connectionTCB.remoteAddress[0],
                 serializedHeader,
-            )
-            return ackHeader, b""
+            );
 
-        # Send ACK if data received or need to acknowledge
-        if (
-            payloadData
-            or tcpHeader.has_flag(TCP_FLAGS.SYN)
-            or tcpHeader.has_flag(TCP_FLAGS.FIN)
-        ):
-            return self.buildACKSegment(connectionTCB)
+            return (ACK_header, b"");
 
-        return None
+        if (payloadData or TCP_header.has_flag(TCP_FLAGS.SYN) or TCP_header.has_flag(TCP_FLAGS.FIN)):
+            return self.buildACKSegment(connectionTCB);
 
-    def processAcknowledgment(
-        self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK, acknowledgmentNumber: int
-    ) -> None:
-        """Process incoming ACK and update retransmission queue"""
+        return None;
+
+    def processAcknowledgment(self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK, acknowledgmentNumber: int) -> None:
         if acknowledgmentNumber > connectionTCB.sendUnacknowledged:
-            bytesAcknowledged: int = (
-                acknowledgmentNumber - connectionTCB.sendUnacknowledged
-            )
-            connectionTCB.sendUnacknowledged = acknowledgmentNumber
-            connectionTCB.duplicateAcknowledgmentCount = 0
-            # Remove acknowledged segments from retransmission queue
+            bytesAcknowledged: int = (acknowledgmentNumber - connectionTCB.sendUnacknowledged);
+            connectionTCB.sendUnacknowledged = acknowledgmentNumber;
+            connectionTCB.duplicateAcknowledgmentCount = 0;
+
+            # remove acknowledged segments from retransmission queue
             while connectionTCB.retransmissionQueue:
-                entry: RETRANSMISSION_QUEUE_ENTRY = connectionTCB.retransmissionQueue[0]
-                if (
-                    entry.sequenceNumber + len(entry.payloadData)
-                ) <= acknowledgmentNumber:
-                    # Calculate RTT if this is the first time segment is acknowledged
+                entry: RETRANSMISSION_QUEUE_ENTRY = connectionTCB.retransmissionQueue[0];
+                
+                if (entry.sequenceNumber + len(entry.payloadData)) <= acknowledgmentNumber:
+                    
+                    # calculate RTT if this is the first time segment is acknowledged
+                    # in order to not skew results by retransmissions, we only take the first time segment
                     if entry.retransmissionCount == 0 and entry.transmissionTimestamp:
-                        measuredRTT: float = time.time() - entry.transmissionTimestamp
-                        connectionTCB.updateRoundTripTime(measuredRTT)
+                        measuredRTT: float = time.time() - entry.transmissionTimestamp;
+                        connectionTCB.updateRoundTripTime(measuredRTT);
 
-                    connectionTCB.retransmissionQueue.popleft()
+                    connectionTCB.retransmissionQueue.popleft();
+                
                 else:
-                    break
+                    break;
 
-            # Update congestion window
-            connectionTCB.incrementCongestionWindow(bytesAcknowledged)
+            # the current network can handle our current load 
+            # so we will probe it w/ more bytes
+            connectionTCB.incrementCongestionWindow(bytesAcknowledged);
+        
         elif acknowledgmentNumber == connectionTCB.sendUnacknowledged:
-            # Duplicate ACK
+            #
             connectionTCB.duplicateAcknowledgmentCount += 1
+            
             # Fast retransmit on 3 duplicate ACKs (RFC 5681)
             if connectionTCB.duplicateAcknowledgmentCount == 3:
                 connectionTCB.slowStartThreshold = max(
                     connectionTCB.congestionWindow // 2,
                     connectionTCB.maxSegmentSizeReceive * 2,
-                )
-                connectionTCB.congestionWindow = connectionTCB.slowStartThreshold + (
-                    3 * connectionTCB.maxSegmentSizeReceive
-                )
+                );
 
-    def buildACKSegment(
-        self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK
-    ) -> Tuple[TCP_SEGMENT_HEADER, bytes]:
-        """Build ACK segment"""
-        ackHeader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
+                connectionTCB.congestionWindow = connectionTCB.slowStartThreshold + (3 * connectionTCB.maxSegmentSizeReceive);
+
+    def buildACKSegment(self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK) -> Tuple[TCP_SEGMENT_HEADER, bytes]:
+        ACK_header: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
             sourcePort=connectionTCB.localAddress[1],
             destinationPort=connectionTCB.remoteAddress[1],
             sequenceNumber=connectionTCB.sendSequenceNumber,
@@ -1529,41 +1544,35 @@ class CUSTOM_TCP_STACK:
             windowSize=min(connectionTCB.receiveWindow, 0xFFFF),
             checksum=0,
             urgentPointer=0,
-        )
-        serializedHeader: bytes = ackHeader.serialize()
-        ackHeader.checksum = CALCULATE_TCP_CHECKSUM(
+        );
+
+        serializedHeader: bytes = ACK_header.serialize();
+        ACK_header.checksum = CALCULATE_TCP_CHECKSUM(
             connectionTCB.localAddress[0],
             connectionTCB.remoteAddress[0],
             serializedHeader,
-        )
-        return ackHeader, b""
+        );
 
-    def sendData(
-        self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK, payloadData: bytes
-    ) -> List[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """
-        Send data segment(s) with proper segmentation and window checking.
-        Returns list of (header, payload) tuples to be sent.
-        """
-        segmentsToSend: List[Tuple[TCP_SEGMENT_HEADER, bytes]] = []
-        dataOffset: int = 0
+        return (ACK_header, b"");
+
+    def sendData(self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK, payloadData: bytes) -> List[Tuple[TCP_SEGMENT_HEADER, bytes]]:
+        segmentsToSend: List[Tuple[TCP_SEGMENT_HEADER, bytes]] = [];
+        dataOffset: int = 0;
+
         while dataOffset < len(payloadData):
-            # Calculate how much data we can send
-            availableWindow: int = connectionTCB.getSendWindow()
-            inFlight: int = (
-                connectionTCB.sendSequenceNumber - connectionTCB.sendUnacknowledged
-            )
-            canSend: int = availableWindow - inFlight
+            availableWindow: int = connectionTCB.getSendWindow();
+            inFlight: int = (connectionTCB.sendSequenceNumber - connectionTCB.sendUnacknowledged);
+            canSend: int = (availableWindow - inFlight);
+            
             if canSend <= 0:
-                break
+                break;
 
-            segmentSize: int = min(
-                len(payloadData) - dataOffset, connectionTCB.maxSegmentSizeSend, canSend
-            )
+            segmentSize: int = min(len(payloadData) - dataOffset, connectionTCB.maxSegmentSizeSend, canSend);
+        
             if segmentSize <= 0:
-                break
+                break;
 
-            segmentPayload: bytes = payloadData[dataOffset : dataOffset + segmentSize]
+            segmentPayload: bytes = payloadData[dataOffset : dataOffset + segmentSize];
             dataHeader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
                 sourcePort=connectionTCB.localAddress[1],
                 destinationPort=connectionTCB.remoteAddress[1],
@@ -1574,32 +1583,35 @@ class CUSTOM_TCP_STACK:
                 windowSize=min(connectionTCB.receiveWindow, 0xFFFF),
                 checksum=0,
                 urgentPointer=0,
-            )
-            serializedHeader: bytes = dataHeader.serialize()
+            );
+
+            serializedHeader: bytes = dataHeader.serialize();
             dataHeader.checksum = CALCULATE_TCP_CHECKSUM(
                 connectionTCB.localAddress[0],
                 connectionTCB.remoteAddress[0],
                 serializedHeader + segmentPayload,
-            )
-            # Add to retransmission queue
+            );
+
+            # add to retransmission queue
             retransmissionEntry: RETRANSMISSION_QUEUE_ENTRY = (
                 RETRANSMISSION_QUEUE_ENTRY(
                     sequenceNumber=connectionTCB.sendSequenceNumber,
                     payloadData=segmentPayload,
                     transmissionTimestamp=time.time(),
                 )
-            )
-            connectionTCB.retransmissionQueue.append(retransmissionEntry)
-            connectionTCB.sendSequenceNumber += segmentSize
-            dataOffset += segmentSize
-            segmentsToSend.append((dataHeader, segmentPayload))
+            );
 
-        return segmentsToSend
+            connectionTCB.retransmissionQueue.append(retransmissionEntry);
+            connectionTCB.sendSequenceNumber += segmentSize;
+            dataOffset += segmentSize;
+            segmentsToSend.append((dataHeader, segmentPayload));
 
-    def initiateClose(
-        self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK
-    ) -> Tuple[TCP_SEGMENT_HEADER, bytes]:
-        """Initiate connection close by sending FIN"""
+        return segmentsToSend;
+
+    def initiateClose(self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK) -> Tuple[TCP_SEGMENT_HEADER, bytes]:
+        
+        # we will close the connection by sending FIN flag
+
         connectionTCB.updateState(TCP_STATE.FIN_WAIT_1)
         finHeader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
             sourcePort=connectionTCB.localAddress[1],
@@ -1611,148 +1623,149 @@ class CUSTOM_TCP_STACK:
             windowSize=min(connectionTCB.receiveWindow, 0xFFFF),
             checksum=0,
             urgentPointer=0,
-        )
-        connectionTCB.sendSequenceNumber += 1  # FIN consumes one sequence number
+        );
 
-        serializedHeader: bytes = finHeader.serialize()
+        connectionTCB.sendSequenceNumber += 1;  # FIN consumes only one sequence number
+
+        serializedHeader: bytes = finHeader.serialize();
         finHeader.checksum = CALCULATE_TCP_CHECKSUM(
             connectionTCB.localAddress[0],
             connectionTCB.remoteAddress[0],
             serializedHeader,
-        )
-        return finHeader, b""
+        );
 
-    def handleFIN_WAIT_1(
-        self,
+        return (finHeader, b"");
+
+    def handleFIN_WAIT_1(self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """Handle segment in FIN_WAIT_1 state"""
-        if tcpHeader.has_flag(TCP_FLAGS.ACK):
-            if tcpHeader.acknowledgmentNumber == connectionTCB.sendSequenceNumber:
-                # Our FIN was acknowledged
-                if tcpHeader.has_flag(TCP_FLAGS.FIN):
-                    # Simultaneous close
-                    connectionTCB.receiveSequenceNumber += 1
-                    connectionTCB.updateState(TCP_STATE.TIME_WAIT)
-                    return self.buildACKSegment(connectionTCB)
+        
+        # enter this state after the active closer (the one initd closing the state) sends its own FIN  after all transmx 
+        # handle segment in FIN_WAIT_1 status 
+        # when we get this, we want 2 things to happen now
+        # 1. an ACK (confirming that the other end has recieved the FIN)
+        # 2. a FIN (to simulate "simultaneous close")
+
+        # CLOSE_WAIT indicates that the remote endpoint (other side of the connection) has closed the connection.
+        # TIME_WAIT indicates that local endpoint (this side) has closed the connection.
+
+        if TCP_header.has_flag(TCP_FLAGS.ACK):
+            if TCP_header.acknowledgmentNumber == connectionTCB.sendSequenceNumber: # means our sent FIN was acknowledged
+                if TCP_header.has_flag(TCP_FLAGS.FIN): # we will simulate simultaneous close here 
+                    connectionTCB.receiveSequenceNumber += 1; # the one FIN flag 
+                    connectionTCB.updateState(TCP_STATE.TIME_WAIT);
+                    return self.buildACKSegment(connectionTCB);
+
+                    # FIN_WAIT_1 we havent processed the ACK flag
+                    # FIN_WAIT_2 when the reciever hasnt done transmitting the data
                 else:
-                    connectionTCB.updateState(TCP_STATE.FIN_WAIT_2)
+                    connectionTCB.updateState(TCP_STATE.FIN_WAIT_2);
 
-        if tcpHeader.has_flag(TCP_FLAGS.FIN):
-            connectionTCB.receiveSequenceNumber += 1
+        if TCP_header.has_flag(TCP_FLAGS.FIN):
+            connectionTCB.receiveSequenceNumber += 1;
+
             if connectionTCB.currentState == TCP_STATE.FIN_WAIT_1:
-                connectionTCB.updateState(TCP_STATE.CLOSING)
-            else:
-                connectionTCB.updateState(TCP_STATE.TIME_WAIT)
-            return self.buildACKSegment(connectionTCB)
+                connectionTCB.updateState(TCP_STATE.CLOSING);
 
-        return None
+            else:
+                connectionTCB.updateState(TCP_STATE.TIME_WAIT);
+
+            return self.buildACKSegment(connectionTCB);
+
+        return None;
 
     def handleFIN_WAIT_2(
         self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """Handle segment in FIN_WAIT_2 state"""
-        if tcpHeader.has_flag(TCP_FLAGS.FIN):
-            connectionTCB.receiveSequenceNumber += 1
-            connectionTCB.updateState(TCP_STATE.TIME_WAIT)
-            return self.buildACKSegment(connectionTCB)
+        if TCP_header.has_flag(TCP_FLAGS.FIN):
+            connectionTCB.receiveSequenceNumber += 1;
+            connectionTCB.updateState(TCP_STATE.TIME_WAIT);
+            return self.buildACKSegment(connectionTCB);
 
-        # Process any remaining data
+        # since the reciever hasnt finished, we complete it with transmission of any remaining payload/data
         if payloadData:
-            return self.handleESTABLISHED(connectionTCB, tcpHeader, payloadData)
+            return self.handleESTABLISHED(connectionTCB, TCP_header, payloadData);
 
-        return None
+        return None;
 
     def handleCLOSE_WAIT(
         self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
-    ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """Handle segment in CLOSE_WAIT state"""
+    ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]: 
+
         # Process ACKs for any remaining data we send
-        if tcpHeader.has_flag(TCP_FLAGS.ACK):
-            self.processAcknowledgment(connectionTCB, tcpHeader.acknowledgmentNumber)
+        if TCP_header.has_flag(TCP_FLAGS.ACK):
+            self.processAcknowledgment(connectionTCB, TCP_header.acknowledgmentNumber);
 
         # Application should call initiateClose() when ready
-        return None
+        return None;
 
-    def handleCLOSING(
-        self,
+    def handleCLOSING(self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """Handle segment in CLOSING state"""
-        if tcpHeader.has_flag(TCP_FLAGS.ACK):
-            if tcpHeader.acknowledgmentNumber == connectionTCB.sendSequenceNumber:
-                connectionTCB.updateState(TCP_STATE.TIME_WAIT)
 
-        return None
+        # 
+        if TCP_header.has_flag(TCP_FLAGS.ACK):
+            if TCP_header.acknowledgmentNumber == connectionTCB.sendSequenceNumber:
+                connectionTCB.updateState(TCP_STATE.TIME_WAIT);
+
+        return None;
 
     def handleLAST_ACK(
         self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
         """Handle segment in LAST_ACK state"""
-        if tcpHeader.has_flag(TCP_FLAGS.ACK):
-            if tcpHeader.acknowledgmentNumber == connectionTCB.sendSequenceNumber:
-                connectionTCB.updateState(TCP_STATE.CLOSED)
-                self.removeConnection(
-                    connectionTCB.localAddress, connectionTCB.remoteAddress
-                )
 
-        return None
+        if TCP_header.has_flag(TCP_FLAGS.ACK):
+            if TCP_header.acknowledgmentNumber == connectionTCB.sendSequenceNumber:
+                connectionTCB.updateState(TCP_STATE.CLOSED);
+                self.removeConnection(connectionTCB.localAddress, connectionTCB.remoteAddress);
+
+        return None;
 
     def handleTIME_WAIT(
         self,
         connectionTCB: TCP_CONNECTION_CONTROL_BLOCK,
-        tcpHeader: TCP_SEGMENT_HEADER,
+        TCP_header: TCP_SEGMENT_HEADER,
         payloadData: bytes,
     ) -> Optional[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """
-        Handle segment in TIME_WAIT state.
-        TIME_WAIT lasts for 2*MSL (Maximum Segment Lifetime) to ensure
-        all segments from the closed connection have left the network.
-        """
         # In a real implementation, we'd wait 2*MSL (typically 60-120 seconds)
         # before moving to CLOSED state
 
         # If we receive a FIN, the other side may not have received our last ACK
-        if tcpHeader.has_flag(TCP_FLAGS.FIN):
+        if TCP_header.has_flag(TCP_FLAGS.FIN):
             # Re-ACK the FIN
-            return self.buildACKSegment(connectionTCB)
+            return self.buildACKSegment(connectionTCB);
 
-        return None
+        return None;
 
-    def checkRetransmissions(
-        self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK
-    ) -> List[Tuple[TCP_SEGMENT_HEADER, bytes]]:
-        """
-        Check retransmission queue for timed-out segments.
-        Returns list of segments that need to be retransmitted.
-        """
-        segmentsToRetransmit: List[Tuple[TCP_SEGMENT_HEADER, bytes]] = []
-        currentTime: float = time.time()
+    def checkRetransmissions(self, connectionTCB: TCP_CONNECTION_CONTROL_BLOCK) -> List[Tuple[TCP_SEGMENT_HEADER, bytes]]:
+
+        # we will check the retransmissionQueue and return the list oif sgements that are unacked
+        segmentsToRetransmit: List[Tuple[TCP_SEGMENT_HEADER, bytes]] = [];
+        currentTime: float = time.time();
+
         for entry in connectionTCB.retransmissionQueue:
-            if (
-                currentTime - entry.transmissionTimestamp
-            ) >= connectionTCB.retransmissionTimeout:
+            if (currentTime - entry.transmissionTimestamp) >= connectionTCB.retransmissionTimeout:
                 if entry.retransmissionCount >= connectionTCB.MAX_RETRANSMISSIONS:
+                    
                     # Too many retransmissions - close connection
-                    print(f"[TCP]: Max retransmissions reached, closing connection")
-                    connectionTCB.updateState(TCP_STATE.CLOSED)
-                    self.removeConnection(
-                        connectionTCB.localAddress, connectionTCB.remoteAddress
-                    )
-                    return []
+                    print(f"[TCP]: Max retransmissions reached, closing connection");
+                    connectionTCB.updateState(TCP_STATE.CLOSED);
+                    self.removeConnection(connectionTCB.localAddress, connectionTCB.remoteAddress);
+                    return [];
 
                 # Retransmit segment
                 retransmissionHeader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
@@ -1765,17 +1778,19 @@ class CUSTOM_TCP_STACK:
                     windowSize=min(connectionTCB.receiveWindow, 0xFFFF),
                     checksum=0,
                     urgentPointer=0,
-                )
-                serializedHeader: bytes = retransmissionHeader.serialize()
+                );
+
+                serializedHeader: bytes = retransmissionHeader.serialize();
                 retransmissionHeader.checksum = CALCULATE_TCP_CHECKSUM(
                     connectionTCB.localAddress[0],
                     connectionTCB.remoteAddress[0],
                     serializedHeader + entry.payloadData,
-                )
-                entry.transmissionTimestamp = currentTime
-                entry.retransmissionCount += 1
-                connectionTCB.handleTimeout()
-                segmentsToRetransmit.append((retransmissionHeader, entry.payloadData))
+                );
+
+                entry.transmissionTimestamp = currentTime;
+                entry.retransmissionCount += 1;
+                connectionTCB.handleTimeout();
+                segmentsToRetransmit.append((retransmissionHeader, entry.payloadData));
 
         return segmentsToRetransmit;
 
