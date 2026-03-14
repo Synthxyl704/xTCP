@@ -1,12 +1,14 @@
 import asyncio
 import signal
 
-# from ssl import VERIFY_X509_STRICT
 import time
 
 from constants import (
     BUFFER_SIZE,
 )
+
+from typing import Optional
+
 from management import SESSION_MANAGER, TRANSACTION_LOGGER
 from protocols import (
     PARSE_USER_AGENT,
@@ -15,237 +17,16 @@ from protocols import (
     COMPRESS_RESPONSE,
     HANDLE_HTTP2_CONNECTION,
     CREATE_TLS_CONTEXT,
+    CUSTOM_TCP_STACK,
+    TCP_SEGMENT_HEADER,
+    TCP_STATE,
+    TCP_FLAGS,
+    IP_PACKET_HEADER,
+    TCP_CONNECTION_CONTROL_BLOCK,
+    CALCULATE_TCP_CHECKSUM,
+    CALCULATE_CHECKSUM,
 )
 
-# import threading;
-# import selectors;
-# import socket;
-#
-# def HANDLE_CLIENT_CONNECTION(
-#     connection: socket.socket,
-#     clientAddress,
-#     isTLS=False,
-#     isIPv6=False,
-#     applicationProtocol="http/1.1",
-# ):
-#     if applicationProtocol == "h2":
-#         try:
-#             HANDLE_HTTP2_CONNECTION(connection, clientAddress, isTLS, isIPv6);
-#         except Exception as HTTP2_SERVER_ERROR:
-#             print(f"[!ERR]: {HTTP2_SERVER_ERROR}");
-#         finally:
-#             try:
-#                 connection.shutdown(socket.SHUT_RDWR);
-#             except:
-#                 pass;
-#             connection.close();
-#         return;
-#
-#     try:
-#         connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1);
-#     except:
-#         pass;
-#
-#     protocol = "HTTPS" if isTLS else "HTTP";
-#     IPvX = "IPv6" if isIPv6 else "IPv4";
-#     sessionID = SESSION_MANAGER.CREATE_NEW_SESSION(clientAddress);
-#     connection.settimeout(10.0);
-#
-#     try:
-#         while serverRunningStatus:
-#             TXN_start = time.time();
-#             try:
-#                 data = connection.recv(BUFFER_SIZE);
-#                 if not data:
-#                     break;
-#             except:
-#                 break;
-#
-#             req = PARSE_HTTP_REQUEST(data);
-#             if not req:
-#                 break;
-#
-#             userAgent = req["headers"].get("user-agent", "");
-#             browser = PARSE_USER_AGENT(userAgent);
-#             SESSION_MANAGER.UPDATE_SESSION(sessionID, userAgent);
-#             connHeader = req["headers"].get("connection", "").lower();
-#             keepAlive = (
-#                 (connHeader != "close")
-#                 if req["version"] == "HTTP/1.1"
-#                 else (connHeader == "keep-alive")
-#             );
-#             if ".." in req["path"]:
-#                 status, body = 404, b"<h1>404 - Not Found</h1>";
-#             else:
-#                 status = 200;
-#                 body = f"""
-#                 <!DOCTYPE html>
-#                 <html lang="en">
-#                 <head>
-#                     <meta charset="UTF-8">
-#                     <title>IsoAris Server</title>
-#                     <style>
-#                         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-#                         body {{
-#                             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
-#                             background: #404040;
-#                             color: #f5f5f5;
-#                             min-height: 100vh;
-#                             display: flex;
-#                             align-items: center;
-#                             justify-content: center;
-#                         }}
-#                         .container {{
-#                             background: #080808;
-#                             backdrop-filter: blur(10px);
-#                             padding: 2rem;
-#                             border-radius: 0.5px;
-#                             box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-#                             text-align: center;
-#                             max-width: 500px;
-#                         }}
-#                         h1 {{ font-size: 2rem; margin-bottom: 0.5rem; letter-spacing: 0.5px; }}
-#                         p {{ font-size: 1.1rem; opacity: 0.9; margin-bottom: 1rem; }}
-#                         .path {{
-#                             background: rgba(255,255,255,0.1);
-#                             padding: 0.75rem;
-#                             border-radius: 6px;
-#                             font-family: monospace;
-#                             font-size: 0.95rem;
-#                             word-break: break-all;
-#                             margin-bottom: 1rem;
-#                         }}
-#                         footer {{ font-size: 0.85rem; opacity: 0.7; }}
-#                     </style>
-#                 </head>
-#                 <body>
-#                     <div class="container">
-#                         <h1>IsoAris {protocol} Server</h1>
-#                         <p>Request received successfully.</p>
-#                         <div class="path">{req["path"]}</div>
-#                         <footer>Powered by IsoAris_xTCP</footer>
-#                     </div>
-#                 </body>
-#                 </html>
-#                 """.encode("utf-8");
-#
-#             compressedBody, encType = COMPRESS_RESPONSE(
-#                 body, req["headers"].get("accept-encoding", "")
-#             );
-#             headers = BUILD_HTTP_RESPONSE(
-#                 status,
-#                 "text/html",
-#                 len(compressedBody),
-#                 encType,
-#                 "keep-alive" if keepAlive else "close",
-#                 isTLS,
-#             );
-#             connection.sendall(headers + compressedBody);
-#             TRANSACTION_LOGGER.LOG_ENTRY(
-#                 {
-#                     "session": sessionID,
-#                     "client": str(clientAddress),
-#                     "method": req["method"],
-#                     "path": req["path"],
-#                     "status": status,
-#                     "duration": (time.time() - TXN_start) * 1000,
-#                     "protocol": protocol,
-#                     "encoding": encType,
-#                 }
-#             );
-#             if not keepAlive:
-#                 break;
-#     except Exception as SOME_SERVER_ERROR:
-#         print(f"[!ERR]: {SOME_SERVER_ERROR}");
-#     finally:
-#         try:
-#             connection.shutdown(socket.SHUT_RDWR);
-#         except:
-#             pass;
-#         connection.close();
-#
-#
-# def START_LOOPBACK_SERVER(IPaddr, port, isTLS=False):
-#     family = socket.AF_INET6 if ":" in IPaddr else socket.AF_INET;
-#     server = socket.socket(family, socket.SOCK_STREAM);
-#     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
-#     try:
-#         server.bind((IPaddr, port));
-#     except OSError as PORT_BIND_ERROR:
-#         print(f"[!BIND_ERR]: Could not bind to {IPaddr}:{port} - {PORT_BIND_ERROR}");
-#         return;
-#
-#     server.listen(128);
-#     server.setblocking(False);
-#
-#     mostEfficientSelector = selectors.DefaultSelector();
-#     mostEfficientSelector.register(server, selectors.EVENT_READ);
-#     TLS_CTX = CREATE_TLS_CONTEXT() if isTLS else None;
-#     print(f"[*] Serving {('HTTPS' if isTLS else 'HTTP')} on {IPaddr}:{port}");
-#     while serverRunningStatus:
-#         events = mostEfficientSelector.select(timeout=1);
-#         for key, bitmask in events:
-#             try:
-#                 connection, addr = server.accept();
-#                 if isTLS and TLS_CTX:
-#                     try:
-#                         connection = TLS_CTX.wrap_socket(connection, server_side=True);
-#                     except Exception as tls_err:
-#                         print(f"[!TLS_HANDSHAKE_ERR]: {tls_err}");
-#                         connection.close();
-#                         continue;
-#
-#                 selectedProtocol = (
-#                     connection.selected_alpn_protocol() if (isTLS and TLS_CTX) else "http/1.1"
-#                 );
-#
-#                 if selectedProtocol is None:
-#                     selectedProtocol = "http/1.1";
-#
-#                 threading.Thread(
-#                     target=HANDLE_CLIENT_CONNECTION,
-#                     args=(
-#                         connection,
-#                         addr,
-#                         isTLS,
-#                         family == socket.AF_INET6,
-#                         selectedProtocol,
-#                     ),
-#                     daemon=True,
-#                 ).start();
-#             except BlockingIOError:
-#                 continue;
-#             except Exception as SERVER_EXIT_ERROR:
-#                 if serverRunningStatus:
-#                     print(f"[!ACCEPT_ERR]: {SERVER_EXIT_ERROR}");
-#
-#     server.close();
-#
-#
-# def interruptSignalHandler(sig, frame):
-#     global serverRunningStatus;
-#     print("\n[!] Shutdown signal received...");
-#     serverRunningStatus = False;
-#
-#
-# if __name__ == "__main__":
-#     configs = [
-#         ("127.0.0.1", 8080, False),
-#         ("::1", 8080, False),
-#         ("0.0.0.0", 8443, True),
-#         ("::1", 8443, True),
-#     ];
-#     for IPaddr, portUsed, TLS_booleanFlag in configs:
-#         singularThread = threading.Thread(
-#             target=START_LOOPBACK_SERVER,
-#             args=(IPaddr, portUsed, TLS_booleanFlag),
-#             daemon=True,
-#         );
-#         singularThread.start();
-#
-#     signal.signal(signal.SIGINT, interruptSignalHandler);
-#     while serverRunningStatus:
-#         time.sleep(1);
 
 async def HANDLE_ASYNC_CLIENT_CONNECTION(
     reader: asyncio.StreamReader,
@@ -254,12 +35,7 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
     isIPv6enabled: bool = False,
     applicationLayerProtocol: str = "http/1.1",
 ):
-    clientAddress = writer.get_extra_info("peername");
-    # NOTE: HTTP/2 handler is disabled via ALPN (Option B)
-    # If re-enabled, this code has issues:
-    # 1. writer.get_extra_info("socket") returns raw socket, bypassing SSL
-    # 2. HANDLE_HTTP2_CONNECTION uses blocking I/O, incompatible with asyncio
-    # 3. Would need async rewrite of HTTP/2 handler for proper integration
+    clientAddress = writer.get_extra_info("peername")
     if applicationLayerProtocol == "h2":
         try:
             HANDLE_HTTP2_CONNECTION(
@@ -267,59 +43,61 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
                 clientAddress,
                 isTLSenabled,
                 isIPv6enabled,
-            );
+            )
         except Exception as HTTP2_SERVER_ERROR:
-            print(f"[!ERR]: {HTTP2_SERVER_ERROR}");
+            print(f"[!HTTP/2_ERR]: {HTTP2_SERVER_ERROR}")
         finally:
             try:
-                writer.close();
-                await writer.wait_closed();
-            except Exception as ASYNCIO_WRITER_ERROR:
-                print(f"[!ERR]: {ASYNCIO_WRITER_ERROR}");
-        return;
+                writer.close()
+                await writer.wait_closed()
+            except Exception ASYNCIO_WRITER_ERROR:
+                print(f"[!ERR]: {ASYNCIO_WRITER_ERROR}")
 
-    transportProtocol: str = "HTTPS" if (isTLSenabled) else "HTTP";
-    IPvX: str = "IPv6" if (isIPv6enabled) else "IPv4";
-    uniqueSessionID = SESSION_MANAGER.CREATE_NEW_SESSION(clientAddress);
+        return
+
+    transportProtocol: str = "HTTPS" if (isTLSenabled) else "HTTP"
+    IPvX: str = "IPv6" if (isIPv6enabled) else "IPv4"
+    uniqueSessionID = SESSION_MANAGER.CREATE_NEW_SESSION(clientAddress)
     try:
         while True:
-            transactionStartTS: float = time.time();
+            transactionStartTS: float = time.time()
             try:
-                incomingDataBuffer = (
-                    await asyncio.wait_for(
-                        reader.read(BUFFER_SIZE), timeout=10.0
-                    )
-                );
+                incomingDataBuffer = await asyncio.wait_for(
+                    reader.read(BUFFER_SIZE), timeout=10.0
+                )
                 if not incomingDataBuffer:
-                    break;
+                    break
             except asyncio.TimeoutError as ASYNCIO_TIMEOUT_ERROR:
-                print(f"[!ERR]: {ASYNCIO_TIMEOUT_ERROR}");
+                print(f"[!ERR]: {ASYNCIO_TIMEOUT_ERROR}")
             except Exception as ASYNCTIO_INCOMING_BUFFER_ERROR:
-                print(f"[!L291-ERR]: {ASYNCTIO_INCOMING_BUFFER_ERROR}");
+                print(f"[!L291-ERR]: {ASYNCTIO_INCOMING_BUFFER_ERROR}")
 
-            parsedHTTPrequest = PARSE_HTTP_REQUEST(incomingDataBuffer);
+            parsedHTTPrequest = PARSE_HTTP_REQUEST(incomingDataBuffer)
             if not parsedHTTPrequest:
-                print(f"[!ERR]: something went wrong in parsing the HTTP request function");
-                break;
+                print(
+                    f"[!ERR]: something went wrong in parsing the HTTP request function"
+                )
 
-            userAgentStr: str = parsedHTTPrequest["headers"].get("user-agent", "");
-            browserInfo = PARSE_USER_AGENT(userAgentStr);
-            SESSION_MANAGER.UPDATE_SESSION(uniqueSessionID, userAgentStr);
+                break
+
+            userAgentStr: str = parsedHTTPrequest["headers"].get("user-agent", "")
+            browserInfo = PARSE_USER_AGENT(userAgentStr)
+            SESSION_MANAGER.UPDATE_SESSION(uniqueSessionID, userAgentStr)
             connectionHeaderValue = (
                 parsedHTTPrequest["headers"].get("connection", "").lower()
-            );
+            )
             isKeepAliveConnection = (
                 (connectionHeaderValue != "close")
                 if (parsedHTTPrequest["version"] == "HTTP/1.1")
                 else (connectionHeaderValue == "keep-alive")
-            );
+            )
             if ".." in parsedHTTPrequest["path"]:
-                HTTP_STATUS_CODE: int = 404;
+                HTTP_STATUS_CODE: int = 404
                 responseBodyContent = (
                     b"<h1>ERR 404 - Invalid page access was restricted</h1>"
-                );
+                )
             else:
-                HTTP_STATUS_CODE: int = 200;
+                HTTP_STATUS_CODE: int = 200
                 responseBodyContent = f"""
                 <!DOCTYPE html>
                 <html lang="en">
@@ -369,12 +147,12 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
                     </div>
                 </body>
                 </html>
-                """.encode("utf-8");
+                """.encode("utf-8")
 
             compressedResponseBody, contentEncodingType = COMPRESS_RESPONSE(
                 responseBodyContent,
                 parsedHTTPrequest["headers"].get("accept-encoding", ""),
-            );
+            )
             httpResponseHeaders: bytes = BUILD_HTTP_RESPONSE(
                 HTTP_STATUS_CODE,
                 "text/html",
@@ -382,10 +160,9 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
                 contentEncodingType,
                 "keep-alive" if (isKeepAliveConnection) else "close",
                 isTLSenabled,
-            );
-            writer.write(httpResponseHeaders + compressedResponseBody);
-            await writer.drain();
-
+            )
+            writer.write(httpResponseHeaders + compressedResponseBody)
+            await writer.drain()
             TRANSACTION_LOGGER.LOG_ENTRY(
                 {
                     "session": uniqueSessionID,
@@ -397,57 +174,56 @@ async def HANDLE_ASYNC_CLIENT_CONNECTION(
                     "protocol": transportProtocol,
                     "encoding": contentEncodingType,
                 }
-            );
+            )
             if not isKeepAliveConnection:
-                print(f"[LOG]: closed connection");
-                break;
+                print(f"[LOG]: closed connection")
+                break
     except Exception as SOME_SERVER_ERROR:
-        print(f"[!ERR]: {SOME_SERVER_ERROR}");
+        print(f"[!ERR]: {SOME_SERVER_ERROR}")
     finally:
         try:
-            writer.close();
-            await writer.wait_closed();
-        except Exception as ASYNCIO_WRITER_ERROR:
-            print(f"[!ERR]: {ASYNCIO_WRITER_ERROR}");
+            writer.close()
+            await writer.wait_closed()
+        except Exception ASYNCIO_WRITER_ERROR:
+            print(f"[!ERR]: {ASYNCIO_WRITER_ERROR}")
 
 
 async def START_ASYNCHRONOUS_SERVER(
     serverHostAddr: str, serverPortNumeric: int, isTLSenabled: bool = False
 ):
-    isIPv6 = ":" in (serverHostAddr);
+    isIPv6 = ":" in (serverHostAddr)
     if isTLSenabled:
-        TLScontext = CREATE_TLS_CONTEXT();
+        TLScontext = CREATE_TLS_CONTEXT()
     else:
-        TLScontext = None;
+        TLScontext = None
 
-    protocolName = "HTTPS" if (isTLSenabled) else "HTTP";
-    print(f"[x]: Serving {protocolName} on {serverHostAddr}:{serverPortNumeric}");
+    protocolName = "HTTPS" if (isTLSenabled) else "HTTP"
+    print(f"[x]: Serving {protocolName} on {serverHostAddr}:{serverPortNumeric}")
 
     async def clientConnectionHandler(
         reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ):
-        ssl_object = writer.get_extra_info("ssl_object");
+        ssl_object = writer.get_extra_info("ssl_object")
         if ssl_object and isTLSenabled:
-            negotiated_protocol = ssl_object.selected_alpn_protocol();
+            negotiated_protocol = ssl_object.selected_alpn_protocol()
             application_protocol = (
                 negotiated_protocol if negotiated_protocol else "http/1.1"
-            );
+            )
         else:
-            application_protocol = "http/1.1";
+            application_protocol = "http/1.1"
 
         await HANDLE_ASYNC_CLIENT_CONNECTION(
             reader, writer, isTLSenabled, isIPv6, application_protocol
-        );
+        )
 
     asyncServerInstance = await asyncio.start_server(
         clientConnectionHandler,
         host=serverHostAddr,
         port=serverPortNumeric,
         ssl=TLScontext,
-    );
-
+    )
     async with asyncServerInstance:
-        await (asyncServerInstance.serve_forever());
+        await asyncServerInstance.serve_forever()
 
 
 async def RUN_SERVERS_CONCURRENTLY():
@@ -456,39 +232,220 @@ async def RUN_SERVERS_CONCURRENTLY():
         ("::1", 8080, False),
         ("0.0.0.0", 8443, True),
         ("::1", 8443, True),
-    ];
-
-    serverTaskList = [];
+    ]
+    serverTaskList = []
     for hostAddr, portNumeric, TLSenabledFlag in serverConfigurationList:
         serverCoroutine = START_ASYNCHRONOUS_SERVER(
             hostAddr, portNumeric, TLSenabledFlag
-        );
-        serverTaskList.append(asyncio.create_task(serverCoroutine));
+        )
+        serverTaskList.append(asyncio.create_task(serverCoroutine))
 
-    await asyncio.gather(*serverTaskList, return_exceptions=True);
+    await asyncio.gather(*serverTaskList, return_exceptions=True)
 
 
 def SETUP_ASYNC_SIGNAL_HANDLERS(eventLoop: asyncio.AbstractEventLoop):
     def handleAsyncInterruptSignal():
-        print("\n[!SERVER]: server shutdown signal recv'd");
+        print("\n[!SERVER]: server shutdown signal recv'd")
         for currentTask in asyncio.all_tasks(eventLoop):
-            currentTask.cancel();
+            currentTask.cancel()
 
     for signalNumber in (signal.SIGINT, signal.SIGTERM):
-        eventLoop.add_signal_handler(signalNumber, handleAsyncInterruptSignal);
+        eventLoop.add_signal_handler(signalNumber, handleAsyncInterruptSignal)
 
 
 async def MAIN_ASYNC_ENTRY_POINT():
-    eventLoop = asyncio.get_running_loop();
-    SETUP_ASYNC_SIGNAL_HANDLERS(eventLoop);
+    eventLoop = asyncio.get_running_loop()
+    SETUP_ASYNC_SIGNAL_HANDLERS(eventLoop)
     try:
-        await RUN_SERVERS_CONCURRENTLY();
+        await RUN_SERVERS_CONCURRENTLY()
     except asyncio.CancelledError:
-        print("[!SERVER]: shutting down the server");
+        print("[!SERVER]: shutting down the server")
+
+
+def INITIALIZE_CUSTOM_TCP_STACK() -> CUSTOM_TCP_STACK:
+    customTCPstackInstance: CUSTOM_TCP_STACK = CUSTOM_TCP_STACK()
+    print("[+] TCP Stack initialized: custom implementation ready")
+    return customTCPstackInstance
+
+
+def DEMONSTRATE_TCP_THREE_WAY_HANDSHAKE():
+    print("\n[TCP] Three-way handshake demo (RFC 793)")
+    customTCPstack: CUSTOM_TCP_STACK = INITIALIZE_CUSTOM_TCP_STACK()
+    clientAddress: Tuple[str, int] = ("127.0.0.1", 54321)
+    serverAddress: Tuple[str, int] = ("127.0.0.1", 8080)
+    customTCPstack.listenSockets[serverAddress] = Optional[None]
+    print(f"[Client] -> SYN -> Server")
+    clientISN: int = random.randint(0, 0xFFFFFFFF)
+    print(f"[Client] ISN = {clientISN} (0x{clientISN:08x})")
+    clientSYNheader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
+        sourcePort=clientAddress[1],
+        destinationPort=serverAddress[1],
+        sequenceNumber=clientISN,
+        acknowledgmentNumber=0,
+        dataOffset=5,
+        flags=TCP_FLAGS.SYN,
+        windowSize=65535,
+        checksum=0,
+        urgentPointer=0,
+    )
+    serializedSYN: bytes = clientSYNheader.serialize()
+    clientSYNheader.checksum = CALCULATE_TCP_CHECKSUM(
+        clientAddress[0], serverAddress[0], serializedSYN
+    )
+    clientIPheader: IP_PACKET_HEADER = IP_PACKET_HEADER(
+        sourceIP=clientAddress[0],
+        destinationIP=serverAddress[0],
+        totalLength=40,
+    )
+    response: Optional[Tuple[TCP_SEGMENT_HEADER, bytes]] = (
+        customTCPstack.processIncomingSegment(clientIPheader, clientSYNheader, b"")
+    )
+    if response:
+        synAckHeader: TCP_SEGMENT_HEADER = response[0]
+        print(f"[Server] <- SYN-ACK <- Client")
+        print(
+            f"[Server] ISN = {synAckHeader.sequenceNumber}, ACK = {synAckHeader.acknowledgmentNumber}"
+        )
+    connectionTCB: Optional[TCP_CONNECTION_CONTROL_BLOCK] = (
+        customTCPstack.getConnection(serverAddress, clientAddress)
+    )
+    if connectionTCB:
+        clientACKheader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
+            sourcePort=clientAddress[1],
+            destinationPort=serverAddress[1],
+            sequenceNumber=clientISN + 1,
+            acknowledgmentNumber=synAckHeader.sequenceNumber + 1,
+            dataOffset=5,
+            flags=TCP_FLAGS.ACK,
+            windowSize=65535,
+            checksum=0,
+            urgentPointer=0,
+        )
+        serializedACK: bytes = clientACKheader.serialize()
+        clientACKheader.checksum = CALCULATE_TCP_CHECKSUM(
+            clientAddress[0], serverAddress[0], serializedACK
+        )
+        serverIPheader: IP_PACKET_HEADER = IP_PACKET_HEADER(
+            sourceIP=serverAddress[0],
+            destinationIP=clientAddress[0],
+            totalLength=40,
+        )
+        customTCPstack.processIncomingSegment(serverIPheader, clientACKheader, b"")
+        print(f"[Client] -> ACK -> Server")
+        print(f"[Done] Connection ESTABLISHED, state = {connectionTCB.currentState.value}")
+    
+    print('');
+    return customTCPstack;
+
+
+def DEMONSTRATE_TCP_DATA_TRANSFER():
+    print("\n[TCP] Data transfer demo")
+    customTCPstack: CUSTOM_TCP_STACK = DEMONSTRATE_TCP_THREE_WAY_HANDSHAKE()
+    clientAddress: Tuple[str, int] = ("127.0.0.1", 54321)
+    serverAddress: Tuple[str, int] = ("127.0.0.1", 8080)
+    connectionTCB: Optional[TCP_CONNECTION_CONTROL_BLOCK] = (
+        customTCPstack.getConnection(serverAddress, clientAddress)
+    )
+    if not connectionTCB or connectionTCB.currentState != TCP_STATE.ESTABLISHED:
+        print("[Err] No connection")
+        return
+    samplePayloadData: bytes = b"Hello TCP!"
+    print(
+        f'[Data] Sending: "{samplePayloadData.decode()}" ({len(samplePayloadData)} bytes)'
+    )
+    segments: List[Tuple[TCP_SEGMENT_HEADER, bytes]] = customTCPstack.sendData(
+        connectionTCB, samplePayloadData
+    )
+    print(f"[TCP] Segmented into {len(segments)} part(s)")
+    for i, (hdr, payload) in enumerate(segments):
+        print(f"  [{i + 1}] SEQ={hdr.sequenceNumber}, len={len(payload)}")
+    print(
+        f"[State] SND.UNA={connectionTCB.sendUnacknowledged}, SND.NXT={connectionTCB.sendSequenceNumber}"
+    )
+    print()
+    return customTCPstack
+
+
+def DEMONSTRATE_TCP_CONNECTION_TEARDOWN():
+    print("\n[TCP] Connection teardown demo")
+    customTCPstack: CUSTOM_TCP_STACK = DEMONSTRATE_TCP_THREE_WAY_HANDSHAKE()
+    clientAddress: Tuple[str, int] = ("127.0.0.1", 54321)
+    serverAddress: Tuple[str, int] = ("127.0.0.1", 8080)
+    connectionTCB: Optional[TCP_CONNECTION_CONTROL_BLOCK] = (
+        customTCPstack.getConnection(serverAddress, clientAddress)
+    )
+    if not connectionTCB:
+        print("[Err] No connection")
+        return
+    print(f"[Server] -> FIN -> Client")
+    finSegment: Tuple[TCP_SEGMENT_HEADER, bytes] = customTCPstack.initiateClose(
+        connectionTCB
+    )
+    print(f"[State] {connectionTCB.currentState.value}")
+    print("[Client] -> ACK -> Server")
+    clientACKheader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
+        sourcePort=clientAddress[1],
+        destinationPort=serverAddress[1],
+        sequenceNumber=connectionTCB.receiveSequenceNumber,
+        acknowledgmentNumber=finSegment[0].sequenceNumber + 1,
+        dataOffset=5,
+        flags=TCP_FLAGS.ACK,
+        windowSize=65535,
+        checksum=0,
+        urgentPointer=0,
+    )
+    serializedClientACK: bytes = clientACKheader.serialize()
+    clientACKheader.checksum = CALCULATE_TCP_CHECKSUM(
+        clientAddress[0], serverAddress[0], serializedClientACK
+    )
+    serverIPheader: IP_PACKET_HEADER = IP_PACKET_HEADER(
+        sourceIP=serverAddress[0],
+        destinationIP=clientAddress[0],
+        totalLength=40,
+    )
+    customTCPstack.processIncomingSegment(serverIPheader, clientACKheader, b"")
+    print(f"[Client] -> FIN -> Server")
+    clientFINheader: TCP_SEGMENT_HEADER = TCP_SEGMENT_HEADER(
+        sourcePort=clientAddress[1],
+        destinationPort=serverAddress[1],
+        sequenceNumber=clientACKheader.sequenceNumber,
+        acknowledgmentNumber=finSegment[0].sequenceNumber + 1,
+        dataOffset=5,
+        flags=TCP_FLAGS.FIN | TCP_FLAGS.ACK,
+        windowSize=65535,
+        checksum=0,
+        urgentPointer=0,
+    )
+    serializedClientFIN: bytes = clientFINheader.serialize()
+    clientFINheader.checksum = CALCULATE_TCP_CHECKSUM(
+        clientAddress[0], serverAddress[0], serializedClientFIN
+    )
+    customTCPstack.processIncomingSegment(serverIPheader, clientFINheader, b"")
+    print(f"[Server] -> ACK -> Client")
+    print(f"[Done] TIME_WAIT, then closed")
+    print()
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(MAIN_ASYNC_ENTRY_POINT());
-    except KeyboardInterrupt:
-        print("\n[???]: what was that? eh, continuing anyways");
+    import random
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--tcp-demo":
+        print("\nTCP Stack Demo (RFC 793)")
+        print("1: Handshake  2: Data  3: Teardown  4: All")
+        try:
+            choice = input("> ").strip()
+        except EOFError:
+            choice = "4"
+        if choice in ("1", "4"):
+            DEMONSTRATE_TCP_THREE_WAY_HANDSHAKE()
+        if choice in ("2", "4"):
+            DEMONSTRATE_TCP_DATA_TRANSFER()
+        if choice in ("3", "4"):
+            DEMONSTRATE_TCP_CONNECTION_TEARDOWN()
+        print("Done.")
+    else:
+        try:
+            asyncio.run(MAIN_ASYNC_ENTRY_POINT())
+        except KeyboardInterrupt:
+            print("\n[Stop] Server stopped")
