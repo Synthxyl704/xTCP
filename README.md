@@ -37,9 +37,38 @@ openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 
 > (This) self-signed certificate/s will trigger some browser security warnings which is to be expected for locally signed shit. <br>
 Just click "Advanced" > "Proceed" to bypass.
 
+## Development
+
+### Pre-commit Hooks
+This project uses [pre-commit](https://pre-commit.com/) for code quality checks.
+
+#### Setup
+```bash
+# Install pre-commit if not already installed
+pip install pre-commit
+
+# Install the hooks
+pre-commit install
+
+# Run hooks manually (optional)
+pre-commit run --all-files
+```
+
+#### What it checks
+- YAML/JSON/TOML validity
+- Merge conflict markers
+- Large files (>1MB)
+- Trailing whitespace
+- End-of-file newlines
+- Executable permissions
+- Line endings (LF)
+- Python linting (via Ruff)
+- Python formatting (via Ruff)
+
 ## Logs
 
 | Date | LogNote |
 | ----     | ------------------------ | 
+| 14/03/2026 | Add pre-commit configuration with Ruff |
 | 14/02/2026 | Modularized stuff into a common folder `/src` |
 | 13/02/2026 | Add HTTP/2 implementation  |
