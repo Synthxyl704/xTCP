@@ -10,10 +10,14 @@ class SESSION_MANAGEMENT:
     def __init__(self) -> None:
         self.sessionsDict: Dict[str, Dict] = {};
         self.sessionCounter: int = 0;
-        self.sessionLock = threading.Lock();
+        self.sessionLock = threading.Lock();  # non-recursive mutex for handling parallel connections to restrict resource sharing
+
+    # python's GIL only locks bytecode execution
+    # aka non re-entrant MUTEX
+    # session metadata doesnt get compromised / altered due to threading.Lock()
 
     def CREATE_NEW_SESSION(self, clientAddress: tuple):
-        with self.sessionLock:
+        with self.sessionLock:  # python's RAII
             self.sessionCounter += 1;
             sessionID = f"SESSION_{self.sessionCounter}_{int(time.time())}";
             self.sessionsDict[sessionID] = {
@@ -41,7 +45,7 @@ class SESSION_MANAGEMENT:
 SESSION_MANAGER = SESSION_MANAGEMENT();
 
 class transactionLogger:
-    def __init__(self, logFile: str = "transaction.log"):
+    def __init__(self, logFile: str = "transaction.log"):  # locally ive termed it this
        self.logFile = logFile;
        self.threadLock = threading.Lock();
 
